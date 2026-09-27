@@ -1,0 +1,8 @@
+{
+  "name": "Boti Video Editor",
+  "description": "Edição de vídeo completa com corte, efeitos, legendas automáticas, modelos e exportação HD",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
