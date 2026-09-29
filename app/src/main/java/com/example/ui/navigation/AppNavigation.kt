@@ -196,7 +196,8 @@ fun AppNavigation(
                     onNavigateToEditor = { navigateTo(Screen.EDITOR) },
                     onNavigateToImport = { navigateTo(Screen.IMPORT) },
                     onNavigateToSettings = { navigateTo(Screen.SETTINGS) },
-                    onNavigateToPremium = { navigateTo(Screen.PREMIUM) }
+                    onNavigateToPremium = { navigateTo(Screen.PREMIUM) },
+                    onNavigateToCaptions = { navigateTo(Screen.CAPTIONS) }
                 )
                 Screen.TEMPLATES -> TemplatesScreen(
                     viewModel = viewModel,
@@ -235,7 +236,8 @@ fun AppNavigation(
                 )
                 Screen.SETTINGS -> SettingsScreen(
                     viewModel = viewModel,
-                    onNavigateBack = { navigateTo(Screen.PROJECTS) }
+                    onNavigateBack = { navigateTo(Screen.PROJECTS) },
+                    onNavigateToPremium = { navigateTo(Screen.PREMIUM) }
                 )
                 Screen.ONBOARDING -> OnboardingScreen(
                     onFinishOnboarding = { navigateTo(Screen.PROJECTS) }

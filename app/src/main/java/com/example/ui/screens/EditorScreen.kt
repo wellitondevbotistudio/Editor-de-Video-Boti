@@ -34,6 +34,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -52,6 +53,7 @@ import com.example.template.TextTemplate
 import com.example.template.TextTemplateRepository
 import com.example.transition.TransitionAwareMediaSurface
 import com.example.transition.TransitionType
+import com.example.ui.components.*
 import com.example.ui.theme.*
 import com.example.viewmodel.EditorViewModel
 import com.example.viewmodel.ToolPanel
@@ -505,375 +507,78 @@ fun EditorScreen(
                 }
             }
 
-            // Multi-Track Visual Timeline
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(BackgroundElevated)
-                    .padding(vertical = 8.dp)
-            ) {
-                // Media Track (Clips)
-                if (project.clips.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(60.dp)
-                            .padding(horizontal = 16.dp)
-                            .clickable(onClick = onNavigateToImport)
-                            .background(SurfaceElevated, RoundedCornerShape(8.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "+ Adicionar vídeos e fotos para começar",
-                            color = PrimaryPurpleVariant,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+            // CapCut Pro Multi-Layer Timeline
+            CapCutMultiTrackTimeline(
+                project = project,
+                currentPositionMs = uiState.currentPositionMs,
+                totalDurationMs = totalDurationMs,
+                isPlaying = uiState.isPlaying,
+                selectedClipId = uiState.selectedClipId,
+                selectedAudioId = uiState.selectedAudioTrackId,
+                selectedTextId = uiState.selectedTextId,
+                selectedStickerId = uiState.selectedStickerId,
+                waveforms = uiState.waveforms,
+                canUndo = uiState.canUndo,
+                canRedo = uiState.canRedo,
+                onSeek = { viewModel.seekTo(it) },
+                onSelectClip = { clipId ->
+                    viewModel.selectClip(clipId, seekToClipStart = false)
+                    viewModel.setActivePanel(ToolPanel.EDIT_TOOLS)
+                },
+                onSelectAudio = { audioId ->
+                    viewModel.selectAudioTrack(audioId)
+                    viewModel.setActivePanel(ToolPanel.AUDIO)
+                },
+                onSelectText = { textId ->
+                    viewModel.selectTextOverlay(textId)
+                    viewModel.setActivePanel(ToolPanel.TEXT)
+                },
+                onSelectSticker = { stickerId ->
+                    viewModel.selectSticker(stickerId)
+                    viewModel.setActivePanel(ToolPanel.STICKER)
+                },
+                onSplitClip = { viewModel.splitClipAtPlayhead() },
+                onDeleteSelected = {
+                    if (uiState.selectedClipId != null) {
+                        viewModel.deleteSelectedClip()
+                    } else if (uiState.selectedAudioTrackId != null) {
+                        viewModel.removeAudioTrack(uiState.selectedAudioTrackId!!)
+                    } else if (uiState.selectedTextId != null) {
+                        viewModel.removeTextOverlay(uiState.selectedTextId!!)
+                    } else if (uiState.selectedStickerId != null) {
+                        viewModel.removeSticker(uiState.selectedStickerId!!)
                     }
-                } else {
-                    LazyRow(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(64.dp)
-                            .padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        itemsIndexed(project.clips, key = { _, clip -> clip.id }) { index, clip ->
-                            val isSelected = clip.id == uiState.selectedClipId
-                            val clipDurationMs = com.example.util.TimelineUtils.calculateClipTimelineDuration(clip)
-                            val clipWidthDp = (clipDurationMs / 300).coerceIn(85L, 240L).toInt().dp
-
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = SurfaceElevated,
-                                modifier = Modifier
-                                    .width(clipWidthDp)
-                                    .fillMaxHeight()
-                                    .clickable { viewModel.selectClip(clip.id, seekToClipStart = (clip.id != uiState.selectedClipId)) }
-                                    .border(
-                                        width = if (isSelected) 2.dp else 1.dp,
-                                        color = if (isSelected) PrimaryPurpleVariant else BorderStrong,
-                                        shape = RoundedCornerShape(8.dp)
-                                    )
-                            ) {
-                                Box {
-                                    val clipThumbModel = when {
-                                        clip.thumbnailPath.isNotBlank() -> java.io.File(clip.thumbnailPath)
-                                        clip.localPath.isNotBlank() -> java.io.File(clip.localPath)
-                                        else -> clip.uri
-                                    }
-                                    AsyncImage(
-                                        model = clipThumbModel,
-                                        contentDescription = clip.title,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(Color.Black.copy(alpha = 0.35f))
-                                    )
-
-                                    // Top row: Reorder arrows if selected
-                                    if (isSelected) {
-                                        Row(
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(2.dp)
-                                                .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
-                                        ) {
-                                            if (index > 0) {
-                                                IconButton(
-                                                    onClick = { viewModel.moveClipLeft(clip.id) },
-                                                    modifier = Modifier.size(22.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.ChevronLeft,
-                                                        contentDescription = "Mover para esquerda",
-                                                        tint = Color.White,
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                }
-                                            }
-                                            if (index < project.clips.lastIndex) {
-                                                IconButton(
-                                                    onClick = { viewModel.moveClipRight(clip.id) },
-                                                    modifier = Modifier.size(22.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.ChevronRight,
-                                                        contentDescription = "Mover para direita",
-                                                        tint = Color.White,
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Bottom row: Title & Duration
-                                    Column(
-                                        modifier = Modifier
-                                            .align(Alignment.BottomStart)
-                                            .padding(4.dp)
-                                    ) {
-                                        Text(
-                                            text = clip.title,
-                                            color = Color.White,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            text = "${String.format("%.1f", clipDurationMs / 1000f)}s${if (clip.speed != 1.0f) " • ${clip.speed}x" else ""}",
-                                            color = Color.White.copy(alpha = 0.85f),
-                                            fontSize = 9.sp
-                                        )
-                                    }
-
-                                    if (clip.transition != null) {
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = PrimaryPurple,
-                                            modifier = Modifier
-                                                .align(Alignment.CenterEnd)
-                                                .size(18.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Shuffle,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.padding(3.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Floating round purple (+) button matching Screen 5 of layout app.png
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(CircleShape)
-                                    .background(PrimaryPurple)
-                                    .clickable(onClick = onNavigateToImport)
-                                    .testTag("timeline_add_clip"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = "Adicionar Mídia",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
+                },
+                onUndo = { viewModel.undo() },
+                onRedo = { viewModel.redo() },
+                onAddMedia = onNavigateToImport,
+                onAddAudio = { viewModel.setActivePanel(ToolPanel.AUDIO) },
+                onAddText = { viewModel.setActivePanel(ToolPanel.TEXT) },
+                onAddEffect = { viewModel.setActivePanel(ToolPanel.VFX) },
+                onOpenTransition = { fromId, _ ->
+                    viewModel.selectClip(fromId)
+                    viewModel.setActivePanel(ToolPanel.TRANSITION)
+                },
+                onMoveClipLeft = { uiState.selectedClipId?.let { viewModel.moveClipLeft(it) } },
+                onMoveClipRight = { uiState.selectedClipId?.let { viewModel.moveClipRight(it) } },
+                onDuplicateSelected = { viewModel.duplicateClip() },
+                onMoveText = { textId, newStart ->
+                    val txt = project.texts.find { it.id == textId }
+                    if (txt != null) {
+                        viewModel.updateTextOverlayTiming(textId, newStart, txt.durationMs)
                     }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Multi-Track Audio Section with Waveforms
-                if (project.audios.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        project.audios.forEach { audio ->
-                            val isSelected = audio.id == uiState.selectedAudioTrackId
-                            val waveformSamples = uiState.waveforms[audio.id] ?: emptyList()
-
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (isSelected) SurfaceElevated else SurfaceDark,
-                                border = androidx.compose.foundation.BorderStroke(
-                                    width = if (isSelected) 1.5.dp else 1.dp,
-                                    color = if (isSelected) PrimaryPurpleVariant else BorderStrong
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(34.dp)
-                                    .clickable {
-                                        viewModel.selectAudioTrack(audio.id)
-                                        viewModel.setActivePanel(ToolPanel.AUDIO)
-                                    }
-                                    .testTag("audio_track_${audio.id}")
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(horizontal = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = if (audio.isMuted) Icons.Default.VolumeOff else Icons.Default.MusicNote,
-                                        contentDescription = null,
-                                        tint = if (audio.isMuted) TextTertiary else PrimaryPurpleVariant,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = audio.name,
-                                        color = if (audio.isMuted) TextTertiary else TextPrimary,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        modifier = Modifier.widthIn(max = 110.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-
-                                    // Real Waveform visualization in timeline
-                                    AudioWaveformBar(
-                                        amplitudes = waveformSamples,
-                                        isMuted = audio.isMuted,
-                                        color = if (isSelected) PrimaryPurple else PrimaryPurpleVariant.copy(alpha = 0.75f),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(20.dp)
-                                    )
-
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (audio.isMuted) "Mudo" else "${(audio.volume * 100).toInt()}%",
-                                        color = TextTertiary,
-                                        fontSize = 10.sp
-                                    )
-                                    Spacer(modifier = Modifier.width(2.dp))
-                                    IconButton(
-                                        onClick = { viewModel.toggleAudioTrackMute(audio.id) },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = if (audio.isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                                            contentDescription = "Mute/Unmute",
-                                            tint = if (audio.isMuted) TextTertiary else TextSecondary,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                },
+                onMoveSticker = { stkId, newStart ->
+                    val stk = project.stickers.find { it.id == stkId }
+                    if (stk != null) {
+                        viewModel.updateStickerTiming(stkId, newStart, stk.durationMs)
                     }
-                } else {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = SurfaceDark.copy(alpha = 0.5f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderStrong),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp)
-                            .height(26.dp)
-                            .clickable { viewModel.setActivePanel(ToolPanel.AUDIO) }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = TextTertiary, modifier = Modifier.size(13.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("+ Adicionar trilha de áudio ou música", color = TextTertiary, fontSize = 10.sp)
-                        }
-                    }
-                }
-
-                // Timeline Overlays Tracks (Texts & Stickers)
-                if (project.texts.isNotEmpty() || project.stickers.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        if (project.texts.isNotEmpty()) {
-                            LazyRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                items(project.texts) { txt ->
-                                    val isSel = txt.id == uiState.selectedTextId
-                                    Surface(
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = if (isSel) PrimaryPurpleSoft else SurfaceDark,
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            1.dp,
-                                            if (isSel) PrimaryPurple else BorderStrong
-                                        ),
-                                        modifier = Modifier
-                                            .clickable {
-                                                viewModel.selectTextOverlay(txt.id)
-                                                viewModel.setActivePanel(ToolPanel.TEXT)
-                                            }
-                                            .testTag("timeline_text_${txt.id}")
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        ) {
-                                            Icon(Icons.Default.TextFields, contentDescription = null, tint = if (isSel) PrimaryPurpleVariant else TextSecondary, modifier = Modifier.size(13.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = txt.text.take(14),
-                                                color = if (isSel) TextPrimary else TextSecondary,
-                                                fontSize = 11.sp,
-                                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if (project.stickers.isNotEmpty()) {
-                            LazyRow(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                items(project.stickers) { stk ->
-                                    val isSel = stk.id == uiState.selectedStickerId
-                                    Surface(
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = if (isSel) PrimaryPurpleSoft else SurfaceDark,
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            1.dp,
-                                            if (isSel) PrimaryPurple else BorderStrong
-                                        ),
-                                        modifier = Modifier
-                                            .clickable {
-                                                viewModel.selectSticker(stk.id)
-                                                viewModel.setActivePanel(ToolPanel.STICKER)
-                                            }
-                                            .testTag("timeline_sticker_${stk.id}")
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        ) {
-                                            Icon(if (stk.isGif) Icons.Default.Gif else Icons.Default.EmojiEmotions, contentDescription = null, tint = if (isSel) PrimaryPurpleVariant else TextSecondary, modifier = Modifier.size(13.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = stk.name.take(14),
-                                                color = if (isSel) TextPrimary else TextSecondary,
-                                                fontSize = 11.sp,
-                                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+                },
+                onMoveAudio = { audioId, newStart ->
+                    viewModel.updateAudioTrackPosition(audioId, newStart)
+                },
+                onAddOverlay = { viewModel.setActivePanel(ToolPanel.STICKER) }
+            )
 
             // Main Bottom Dock (Tela 5 de layout app.png)
             if (uiState.activePanel == ToolPanel.NONE && uiState.selectedClipId == null) {
@@ -2465,84 +2170,213 @@ private fun CanvasPanel(project: ProjectItem, viewModel: EditorViewModel) {
 
 @Composable
 private fun VFXPanel(project: ProjectItem, viewModel: EditorViewModel) {
-    var selectedVfxId by remember { mutableStateOf(project.activeVFX.firstOrNull()?.id) }
+    var selectedVfxId by remember { mutableStateOf(project.activeVFX.firstOrNull()?.id ?: "e_halo_blur") }
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
     val selectedVfx = project.activeVFX.find { it.id == selectedVfxId } ?: project.activeVFX.firstOrNull()
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    val filteredEffects = remember(searchQuery) {
+        if (searchQuery.isBlank()) MockData.effects
+        else MockData.effects.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        // CapCut Category Tabs: "Efeitos de vídeo" | "Efeitos de corpo"
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("Efeitos Visuais (VFX)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(
+                    onClick = { selectedTab = 0 },
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (selectedTab == 0) Color(0xFF1E293B) else SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (selectedTab == 0) Color(0xFF38BDF8) else BorderSubtle
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "▶ Efeitos de vídeo",
+                            color = if (selectedTab == 0) Color(0xFF38BDF8) else TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Surface(
+                    onClick = { selectedTab = 1 },
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (selectedTab == 1) Color(0xFF1E293B) else SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (selectedTab == 1) Color(0xFF38BDF8) else BorderSubtle
+                    )
+                ) {
+                    Text(
+                        text = "Efeitos de corpo",
+                        color = if (selectedTab == 1) Color(0xFF38BDF8) else TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+
             if (project.activeVFX.isNotEmpty()) {
                 TextButton(onClick = { viewModel.clearAllVFX() }) {
-                    Text("Desativar Todos", color = DangerRed, fontSize = 12.sp)
+                    Text("Limpar", color = DangerRed, fontSize = 11.sp)
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Search bar (CapCut: "Search for effects")
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Buscar efeitos...", color = TextTertiary, fontSize = 12.sp) },
+            leadingIcon = {
+                Icon(Icons.Default.Search, contentDescription = null, tint = TextTertiary, modifier = Modifier.size(16.dp))
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(10.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = Color(0xFF161622),
+                unfocusedContainerColor = Color(0xFF161622),
+                focusedBorderColor = Color(0xFF38BDF8),
+                unfocusedBorderColor = BorderSubtle,
+                focusedTextColor = TextPrimary,
+                unfocusedTextColor = TextPrimary
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+        )
+
         Spacer(modifier = Modifier.height(10.dp))
 
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(MockData.effects) { effect ->
-                val activeInstance = project.activeVFX.find { it.id == effect.id }
-                val isAct = activeInstance != null
+        // Category Subtitle
+        Text(
+            text = "Básico",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Effect Cards Carousel / Grid (CapCut style)
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(filteredEffects, key = { it.id }) { effect ->
+                val isActiveOnTimeline = project.activeVFX.any { it.id == effect.id }
+                val isSelectedCard = selectedVfxId == effect.id
+
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isAct) PrimaryPurpleSoft else SurfaceDark,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isAct) PrimaryPurple else BorderStrong),
-                    modifier = Modifier.clickable {
-                        viewModel.toggleVFX(effect)
-                        selectedVfxId = effect.id
-                    }
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF161622),
+                    border = androidx.compose.foundation.BorderStroke(
+                        width = if (isSelectedCard) 2.dp else 1.dp,
+                        // Prominent Red Highlight Frame matching CapCut user screenshot!
+                        color = if (isSelectedCard) Color(0xFFEF4444) else BorderSubtle
+                    ),
+                    modifier = Modifier
+                        .width(88.dp)
+                        .clickable {
+                            selectedVfxId = effect.id
+                            viewModel.toggleVFX(effect)
+                        }
+                        .testTag("vfx_card_${effect.id}")
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        modifier = Modifier.padding(4.dp)
                     ) {
-                        Text(
-                            effect.name,
-                            color = if (isAct) PrimaryPurpleVariant else TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = if (isAct) FontWeight.Bold else FontWeight.Normal
-                        )
-                        if (isAct) {
-                            Text(
-                                text = "${activeInstance?.intensity?.toInt() ?: 50}%",
-                                color = PrimaryPurpleVariant,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(64.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF222230))
+                        ) {
+                            AsyncImage(
+                                model = effect.thumbUrl,
+                                contentDescription = effect.name,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
                             )
+
+                            // Overlay icon
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(3.dp)
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.6f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isActiveOnTimeline) Icons.Default.Check else Icons.Default.ArrowDownward,
+                                    contentDescription = null,
+                                    tint = if (isActiveOnTimeline) Color(0xFF22C55E) else Color.White,
+                                    modifier = Modifier.size(10.dp)
+                                )
+                            }
                         }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = effect.name,
+                            color = if (isSelectedCard) Color.White else TextSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = if (isSelectedCard) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
         }
 
-        // Intensity slider if any VFX is active
+        // Intensity slider if active
         if (selectedVfx != null) {
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = SurfaceDark,
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderStrong),
+                shape = RoundedCornerShape(10.dp),
+                color = Color(0xFF161622),
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
+                Column(modifier = Modifier.padding(10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Intensidade (${selectedVfx.name})", color = TextSecondary, fontSize = 12.sp)
-                        Text("${selectedVfx.intensity.toInt()}%", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Intensidade (${selectedVfx.name})", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${selectedVfx.intensity.toInt()}%", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     Slider(
                         value = selectedVfx.intensity,
                         onValueChange = { viewModel.updateVfxIntensity(selectedVfx.id, it) },
                         valueRange = 0f..100f,
                         colors = SliderDefaults.colors(
-                            thumbColor = PrimaryPurpleVariant,
-                            activeTrackColor = PrimaryPurple
+                            thumbColor = Color(0xFF38BDF8),
+                            activeTrackColor = Color(0xFF0284C7)
                         )
                     )
                 }
@@ -2644,33 +2478,3 @@ private fun TrimPanel(clip: MediaClip?, viewModel: EditorViewModel) {
     }
 }
 
-@Composable
-fun AudioWaveformBar(
-    amplitudes: List<Float>,
-    isMuted: Boolean = false,
-    color: Color = PrimaryPurpleVariant,
-    modifier: Modifier = Modifier
-) {
-    val barColor = if (isMuted) Color.Gray.copy(alpha = 0.45f) else color
-    Canvas(modifier = modifier) {
-        val count = if (amplitudes.isEmpty()) 40 else amplitudes.size
-        val barWidth = (size.width / (count * 1.5f)).coerceIn(2f, 8f)
-        val spacing = barWidth * 0.5f
-        val totalBarSpace = barWidth + spacing
-
-        for (i in 0 until count) {
-            val x = i * totalBarSpace
-            if (x + barWidth > size.width) break
-            val amp = amplitudes.getOrNull(i) ?: 0.35f
-            val barHeight = (size.height * amp * 0.9f).coerceAtLeast(3f)
-            val y = (size.height - barHeight) / 2f
-
-            drawRoundRect(
-                color = barColor,
-                topLeft = Offset(x, y),
-                size = Size(barWidth, barHeight),
-                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
-            )
-        }
-    }
-}

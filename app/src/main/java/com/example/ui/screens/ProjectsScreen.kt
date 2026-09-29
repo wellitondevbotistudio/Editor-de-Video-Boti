@@ -37,6 +37,7 @@ import com.example.ui.components.BotiGlassCard
 import com.example.ui.components.BotiIconButton
 import com.example.ui.theme.*
 import com.example.viewmodel.EditorViewModel
+import com.example.viewmodel.ToolPanel
 
 @Composable
 fun ProjectsScreen(
@@ -44,7 +45,8 @@ fun ProjectsScreen(
     onNavigateToEditor: () -> Unit,
     onNavigateToImport: () -> Unit,
     onNavigateToSettings: () -> Unit,
-    onNavigateToPremium: () -> Unit
+    onNavigateToPremium: () -> Unit,
+    onNavigateToCaptions: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showNewProjectDialog by remember { mutableStateOf(false) }
@@ -279,28 +281,37 @@ fun ProjectsScreen(
                                 subtitle = "Automáticas",
                                 icon = Icons.Default.Subtitles,
                                 gradientColors = listOf(Color(0xFF10B981), Color(0xFF047857)),
-                                onClick = onNavigateToEditor
+                                onClick = onNavigateToCaptions
                             )
                             QuickToolItem(
                                 title = "Efeitos IA",
                                 subtitle = "VFX & Glow",
                                 icon = Icons.Default.AutoAwesome,
                                 gradientColors = listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)),
-                                onClick = onNavigateToEditor
+                                onClick = {
+                                    viewModel.setActivePanel(ToolPanel.VFX)
+                                    onNavigateToEditor()
+                                }
                             )
                             QuickToolItem(
                                 title = "Chroma Key",
                                 subtitle = "Remover Fundo",
                                 icon = Icons.Default.CropPortrait,
                                 gradientColors = listOf(Color(0xFFF59E0B), Color(0xFFD97706)),
-                                onClick = onNavigateToEditor
+                                onClick = {
+                                    viewModel.setActivePanel(ToolPanel.FILTER)
+                                    onNavigateToEditor()
+                                }
                             )
                             QuickToolItem(
                                 title = "Música",
                                 subtitle = "Trilhas Sonoras",
                                 icon = Icons.Default.Audiotrack,
                                 gradientColors = listOf(Color(0xFFEC4899), Color(0xFFBE185D)),
-                                onClick = onNavigateToEditor
+                                onClick = {
+                                    viewModel.setActivePanel(ToolPanel.AUDIO)
+                                    onNavigateToEditor()
+                                }
                             )
                         }
                     }

@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +15,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -250,6 +254,37 @@ fun BotiPillChip(
                     textColor = Color.Black
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun AudioWaveformBar(
+    amplitudes: List<Float>,
+    isMuted: Boolean = false,
+    color: Color = PrimaryPurpleVariant,
+    modifier: Modifier = Modifier
+) {
+    val barColor = if (isMuted) Color.Gray.copy(alpha = 0.45f) else color
+    Canvas(modifier = modifier) {
+        val count = if (amplitudes.isEmpty()) 40 else amplitudes.size
+        val barWidth = (size.width / (count * 1.5f)).coerceIn(2f, 8f)
+        val spacing = barWidth * 0.5f
+        val totalBarSpace = barWidth + spacing
+
+        for (i in 0 until count) {
+            val x = i * totalBarSpace
+            if (x + barWidth > size.width) break
+            val amp = amplitudes.getOrNull(i) ?: 0.35f
+            val barHeight = (size.height * amp * 0.9f).coerceAtLeast(3f)
+            val y = (size.height - barHeight) / 2f
+
+            drawRoundRect(
+                color = barColor,
+                topLeft = Offset(x, y),
+                size = Size(barWidth, barHeight),
+                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
+            )
         }
     }
 }

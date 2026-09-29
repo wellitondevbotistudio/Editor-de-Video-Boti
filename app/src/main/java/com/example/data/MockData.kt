@@ -96,15 +96,18 @@ object MockData {
     val audioCategories = listOf("Tudo", "Happy", "Pop", "Vlog", "Cinemático")
 
     val effects: List<VFXEffectItem> = listOf(
+        VFXEffectItem(id = "e_halo_blur", name = "Halo Blur", category = "Básico", thumbUrl = img("ef_halo", 200, 200)),
+        VFXEffectItem(id = "e_diamond_zoom", name = "Diamond Zoom", category = "Básico", thumbUrl = img("ef_diamond", 200, 200)),
+        VFXEffectItem(id = "e_motion_blur", name = "Motion Blur", category = "Básico", thumbUrl = img("ef_motion", 200, 200)),
+        VFXEffectItem(id = "e_fisheye_2", name = "Fisheye II", category = "Básico", thumbUrl = img("ef_fish2", 200, 200)),
+        VFXEffectItem(id = "e_fisheye_4", name = "Fisheye 4", category = "Lente", thumbUrl = img("ef_fish4", 200, 200)),
+        VFXEffectItem(id = "e_trans_fall", name = "Transform to Fall", category = "Movimento", thumbUrl = img("ef_fall", 200, 200)),
+        VFXEffectItem(id = "e_wide_angle", name = "Wide Angle", category = "Lente", thumbUrl = img("ef_wide", 200, 200)),
         VFXEffectItem(id = "e1", name = "Desfoque", category = "Básico", thumbUrl = img("ef1", 200, 200)),
         VFXEffectItem(id = "e2", name = "Glitch", category = "Distorção", thumbUrl = img("ef2", 200, 200), isPremium = true),
         VFXEffectItem(id = "e3", name = "RGB Split", category = "Distorção", thumbUrl = img("ef3", 200, 200), isPremium = true),
         VFXEffectItem(id = "e4", name = "Shake", category = "Básico", thumbUrl = img("ef4", 200, 200)),
-        VFXEffectItem(id = "e5", name = "Vinheta", category = "Retrô", thumbUrl = img("ef5", 200, 200)),
-        VFXEffectItem(id = "e6", name = "Luz Vazada", category = "Luz", thumbUrl = img("ef6", 200, 200)),
-        VFXEffectItem(id = "e7", name = "VHS 90s", category = "Retrô", thumbUrl = img("ef7", 200, 200), isPremium = true),
-        VFXEffectItem(id = "e8", name = "Bokeh Glow", category = "Luz", thumbUrl = img("ef8", 200, 200)),
-        VFXEffectItem(id = "e9", name = "Pixel Art", category = "Distorção", thumbUrl = img("ef9", 200, 200))
+        VFXEffectItem(id = "e7", name = "VHS 90s", category = "Retrô", thumbUrl = img("ef7", 200, 200), isPremium = true)
     )
 
     val transitions: List<TransitionItem> = listOf(
