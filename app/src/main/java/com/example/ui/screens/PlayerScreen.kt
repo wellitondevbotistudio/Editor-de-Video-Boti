@@ -15,7 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -23,6 +23,9 @@ import coil.compose.AsyncImage
 import com.example.ui.theme.*
 import com.example.viewmodel.EditorViewModel
 
+/**
+ * Tela 13: REPRODUTOR - Refinada conforme layout app.png
+ */
 @Composable
 fun PlayerScreen(
     viewModel: EditorViewModel,
@@ -31,7 +34,7 @@ fun PlayerScreen(
     val uiState by viewModel.uiState.collectAsState()
     val project = uiState.currentProject
     val totalMs = viewModel.getTotalDurationMs()
-    var isLooping by remember { mutableStateOf(true) }
+    val context = LocalContext.current
 
     fun formatTime(ms: Long): String {
         val totalSec = ms / 1000
@@ -41,26 +44,126 @@ fun PlayerScreen(
     }
 
     Scaffold(
-        containerColor = Color.Black
+        containerColor = BackgroundDark,
+        topBar = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Voltar",
+                        tint = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Reprodutor",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            }
+        },
+        bottomBar = {
+            // Ações inferiores: [ Compartilhar | Editar | Excluir ] (Tela 13 da referência)
+            Surface(
+                color = SurfaceDark,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 24.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Compartilhar
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clickable {
+                                uiState.lastExportedFilePath?.let { path ->
+                                    viewModel.shareVideo(context, path)
+                                } ?: viewModel.setFeedback("Exporte o vídeo antes de compartilhar.")
+                            }
+                            .padding(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Compartilhar",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Compartilhar", fontSize = 12.sp, color = TextSecondary)
+                    }
+
+                    // Editar
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clickable { onNavigateBack() }
+                            .padding(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Editar",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Editar", fontSize = 12.sp, color = TextSecondary)
+                    }
+
+                    // Excluir
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clickable {
+                                project?.let { viewModel.deleteProject(it.id) }
+                                onNavigateBack()
+                            }
+                            .padding(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Excluir",
+                            tint = DangerRed,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Excluir", fontSize = 12.sp, color = DangerRed)
+                    }
+                }
+            }
+        }
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Main Video Display
+            // Viewport do Vídeo Central
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color.Black)
                     .clickable { viewModel.togglePlayback() },
                 contentAlignment = Alignment.Center
             ) {
-                val ratio = project?.aspectRatio?.ratio ?: (9f / 16f)
+                val ratio = project?.aspectRatio?.ratio ?: (16f / 9f)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(ratio)
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(12.dp))
                 ) {
                     AsyncImage(
                         model = project?.thumbUrl,
@@ -68,181 +171,100 @@ fun PlayerScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
-
-                    // Filter tint
-                    when (project?.activeFilter) {
-                        "P&B" -> Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
-                        "Vívido" -> Box(modifier = Modifier.fillMaxSize().background(PrimaryPurple.copy(alpha = 0.15f)))
-                        "Quente" -> Box(modifier = Modifier.fillMaxSize().background(Color(0xFFFF9800).copy(alpha = 0.15f)))
-                        else -> {}
-                    }
-
-                    // Watermark indicator if not pro
-                    if (!uiState.isPremiumUser) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = Color.Black.copy(alpha = 0.6f),
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = "Boti Editor",
-                                color = Color.White.copy(alpha = 0.7f),
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
                 }
             }
 
-            // Top Bar Overlay
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                IconButton(
-                    onClick = onNavigateBack,
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                        .testTag("player_back_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Voltar",
-                        tint = Color.White
-                    )
-                }
-
-                Text(
-                    text = project?.title ?: "Reprodução",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
-
-                IconButton(
-                    onClick = { viewModel.setFeedback("Link do vídeo copiado para compartilhar") },
-                    modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = "Compartilhar",
-                        tint = Color.White
-                    )
-                }
-            }
-
-            // Bottom Player Controls Overlay
+            // Barra de Controles e Tempo (conforme Tela 13)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
-                    .background(Color.Black.copy(alpha = 0.75f))
-                    .navigationBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 14.dp)
+                    .background(SurfaceDark)
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
             ) {
-                // Scrubber Bar
+                // Indicador de Tempo: 00:07 / 00:18
                 Row(
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = formatTime(uiState.currentPositionMs),
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    Slider(
-                        value = uiState.currentPositionMs.toFloat(),
-                        onValueChange = { viewModel.seekTo(it.toLong()) },
-                        valueRange = 0f..totalMs.toFloat().coerceAtLeast(1000f),
-                        colors = SliderDefaults.colors(
-                            thumbColor = PrimaryPurpleVariant,
-                            activeTrackColor = PrimaryPurpleVariant,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.2f)
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 12.dp)
-                    )
-
-                    Text(
-                        text = formatTime(totalMs),
-                        color = TextTertiary,
-                        fontSize = 12.sp
+                        text = "${formatTime(uiState.currentPositionMs)} / ${formatTime(totalMs)}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextSecondary
                     )
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Transport Controls
+                // Slider / Scrubber
+                Slider(
+                    value = uiState.currentPositionMs.toFloat().coerceIn(0f, totalMs.toFloat().coerceAtLeast(1000f)),
+                    onValueChange = { viewModel.seekTo(it.toLong()) },
+                    valueRange = 0f..totalMs.toFloat().coerceAtLeast(1000f),
+                    colors = SliderDefaults.colors(
+                        thumbColor = PrimaryPurpleVariant,
+                        activeTrackColor = PrimaryPurple,
+                        inactiveTrackColor = TimelineTrackBg
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Linha de Transporte de Reprodução: [ |< | > | >| | repeat | fullscreen ]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(
-                        onClick = { isLooping = !isLooping }
-                    ) {
+                    IconButton(onClick = { viewModel.previousClip() }) {
                         Icon(
-                            imageVector = Icons.Default.Repeat,
-                            contentDescription = "Repetir",
-                            tint = if (isLooping) PrimaryPurpleVariant else TextTertiary
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { viewModel.seekTo(uiState.currentPositionMs - 5000L) }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Replay5,
-                            contentDescription = "Voltar 5s",
+                            imageVector = Icons.Default.SkipPrevious,
+                            contentDescription = "Anterior",
                             tint = Color.White,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(24.dp)
                         )
                     }
 
-                    // Big Play/Pause
                     IconButton(
                         onClick = { viewModel.togglePlayback() },
                         modifier = Modifier
-                            .size(54.dp)
+                            .size(52.dp)
                             .background(PrimaryPurple, CircleShape)
                     ) {
                         Icon(
                             imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
                             tint = Color.White,
-                            modifier = Modifier.size(30.dp)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { viewModel.seekTo(uiState.currentPositionMs + 5000L) }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Forward5,
-                            contentDescription = "Avançar 5s",
-                            tint = Color.White,
                             modifier = Modifier.size(28.dp)
                         )
                     }
 
-                    IconButton(
-                        onClick = { viewModel.setFeedback("Tela cheia alternada") }
-                    ) {
+                    IconButton(onClick = { viewModel.nextClip() }) {
+                        Icon(
+                            imageVector = Icons.Default.SkipNext,
+                            contentDescription = "Próximo",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    IconButton(onClick = { /* loop */ }) {
+                        Icon(
+                            imageVector = Icons.Default.Repeat,
+                            contentDescription = "Repetir",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    IconButton(onClick = { /* fullscreen */ }) {
                         Icon(
                             imageVector = Icons.Default.Fullscreen,
-                            contentDescription = "Tela Cheia",
-                            tint = Color.White
+                            contentDescription = "Tela cheia",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }

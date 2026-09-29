@@ -17,8 +17,15 @@ data class MediaClip(
     val title: String,
     val uri: String,
     val type: MediaType = MediaType.VIDEO,
+    val localPath: String = "",
+    val thumbnailPath: String = "",
+    val originalName: String = "",
+    val mimeType: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    val fileSizeBytes: Long = 0L,
     val durationMs: Long = 5000L,
-    val originalDurationMs: Long = 5000L,
+    val originalDurationMs: Long = 0L,
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = 0L,
     val speed: Float = 1.0f,
@@ -31,7 +38,12 @@ data class MediaClip(
     val transitionDurationMs: Long = 1000L,
     val cropRatio: String = "Original",
     val rotation: Float = 0f,
+    val scale: Float = 1.0f,
+    val flipHorizontal: Boolean = false,
+    val flipVertical: Boolean = false,
     val opacity: Float = 1.0f,
+    val positionX: Float = 0f,
+    val positionY: Float = 0f,
     val isReverse: Boolean = false,
     val isFrozen: Boolean = false
 )
@@ -43,8 +55,15 @@ data class AudioTrackItem(
     val duration: String,
     val durationMs: Long = 60000L,
     val uri: String = "",
+    val localPath: String = "",
+    val originalName: String = "",
+    val mimeType: String = "",
+    val fileSizeBytes: Long = 0L,
     val volume: Float = 0.8f,
     val isMuted: Boolean = false,
+    val timelineStartMs: Long = 0L,
+    val trimStartMs: Long = 0L,
+    val trimEndMs: Long = 0L,
     val fadeInMs: Long = 0L,
     val fadeOutMs: Long = 0L
 )
@@ -56,11 +75,44 @@ data class TextOverlayItem(
     val durationMs: Long = 3000L,
     val posX: Float = 0.5f, // 0..1
     val posY: Float = 0.5f, // 0..1
+    val scale: Float = 1.0f,
+    val rotation: Float = 0f,
+    val opacity: Float = 1.0f,
     val fontSizeSp: Float = 24f,
     val colorHex: String = "#FFFFFF",
     val bgHex: String? = null,
+    val strokeColorHex: String? = null,
+    val strokeWidth: Float = 0f,
+    val shadowColorHex: String? = null,
+    val shadowRadius: Float = 0f,
+    val alignment: String = "Center", // Left, Center, Right
     val fontFamily: String = "Inter",
-    val animation: String = "Fade"
+    val animation: String = "Fade",
+    val animationIn: String = "Fade", // None, Fade, Slide Left, Slide Right, Slide Up, Slide Down, Zoom
+    val animationOut: String = "Fade", // None, Fade, Slide Left, Slide Right, Slide Up, Slide Down, Zoom
+    val animationDurationMs: Long = 500L,
+    val textAnimationMode: String = "Full", // Full, Word, Letter
+    val styleTemplateId: String? = null,
+    val isVisible: Boolean = true
+)
+
+data class StickerItem(
+    val id: String,
+    val uri: String,
+    val localPath: String = "",
+    val name: String = "Sticker",
+    val isGif: Boolean = false,
+    val startTimeMs: Long = 0L,
+    val durationMs: Long = 3000L,
+    val posX: Float = 0.5f, // 0..1
+    val posY: Float = 0.5f, // 0..1
+    val scale: Float = 1.0f,
+    val rotation: Float = 0f,
+    val opacity: Float = 1.0f,
+    val animationIn: String = "Fade",
+    val animationOut: String = "Fade",
+    val animationDurationMs: Long = 500L,
+    val isVisible: Boolean = true
 )
 
 data class SubtitleSegmentItem(
@@ -98,29 +150,37 @@ data class VFXEffectItem(
     val category: String,
     val thumbUrl: String,
     val intensity: Float = 50f,
-    val isPremium: Boolean = false
+    val isPremium: Boolean = false,
+    val clipId: String? = null,
+    val isEnabled: Boolean = true
 )
 
 data class TransitionItem(
     val id: String,
+    val fromClipId: String = "",
+    val toClipId: String = "",
     val name: String,
-    val iconName: String
+    val iconName: String = "shuffle",
+    val durationMs: Long = 1000L,
+    val isEnabled: Boolean = true
 )
 
 data class ProjectItem(
     val id: String,
     val title: String,
-    val duration: String,
-    val date: String,
-    val thumbUrl: String,
+    val duration: String = "00:00",
+    val date: String = "Hoje",
+    val thumbUrl: String = "",
     val aspectRatio: AspectRatio = AspectRatio.RATIO_9_16,
     val clips: List<MediaClip> = emptyList(),
     val audios: List<AudioTrackItem> = emptyList(),
     val texts: List<TextOverlayItem> = emptyList(),
+    val stickers: List<StickerItem> = emptyList(),
     val subtitles: List<SubtitleSegmentItem> = emptyList(),
     val subtitleStyle: SubtitleStyleConfig = SubtitleStyleConfig(),
     val activeFilter: String = "Original",
-    val activeVFX: List<VFXEffectItem> = emptyList()
+    val activeVFX: List<VFXEffectItem> = emptyList(),
+    val transitions: List<TransitionItem> = emptyList()
 )
 
 data class ExportOptions(

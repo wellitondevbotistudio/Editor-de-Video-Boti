@@ -1,9 +1,12 @@
 package com.example.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.MockData
+import com.example.BotiApplication
+import com.example.data.repository.ProjectRepository
 import com.example.model.*
+import com.example.util.TimelineUtils
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,29 +14,36 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.ArrayDeque
 import java.util.UUID
 
 enum class ToolPanel {
     NONE,
+    EDIT_TOOLS,
     TRIM,
     SPEED,
     ADJUST,
     FILTER,
     AUDIO,
     TEXT,
+    TEMPLATES,
+    STICKER,
     CAPTIONS,
     VFX,
     TRANSITION,
     CANVAS,
-    LAYERS
+    LAYERS,
+    TRANSFORM
 }
 
 data class EditorUiState(
-    val projects: List<ProjectItem> = MockData.defaultProjects,
-    val currentProject: ProjectItem? = MockData.defaultProjects.firstOrNull(),
+    val projects: List<ProjectItem> = emptyList(),
+    val currentProject: ProjectItem? = null,
     val currentPositionMs: Long = 0L,
     val isPlaying: Boolean = false,
     val selectedClipId: String? = null,
+    val selectedTextId: String? = null,
+    val selectedStickerId: String? = null,
     val activePanel: ToolPanel = ToolPanel.NONE,
     val isPremiumUser: Boolean = false,
     val isExporting: Boolean = false,
@@ -41,66 +51,220 @@ data class EditorUiState(
     val exportSuccess: Boolean = false,
     val selectedExportOptions: ExportOptions = ExportOptions(),
     val lastExportedFile: String? = null,
-    val feedbackMessage: String? = null
+    val lastExportedFilePath: String? = null,
+    val exportStatusMessage: String? = null,
+    val feedbackMessage: String? = null,
+    val isDatabaseInitialized: Boolean = false,
+    val isImportingMedia: Boolean = false,
+    val importProgress: Float = 0f,
+    val importStatusMessage: String? = null,
+    val canUndo: Boolean = false,
+    val canRedo: Boolean = false,
+    val selectedAudioTrackId: String? = null,
+    val waveforms: Map<String, List<Float>> = emptyMap()
 )
 
-class EditorViewModel : ViewModel() {
+class EditorViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val repository: ProjectRepository = (application as BotiApplication).projectRepository
+    private val storageManager: com.example.data.media.MediaStorageManager = (application as BotiApplication).mediaStorageManager
+    private val metadataExtractor: com.example.data.media.MediaMetadataExtractor = (application as BotiApplication).mediaMetadataExtractor
+
+    val playerManager: com.example.player.EditorPlayerManager = com.example.player.EditorPlayerManager(application, viewModelScope)
+    val waveformGenerator: com.example.data.audio.WaveformGenerator = com.example.data.audio.WaveformGenerator(application)
+    val exportManager: com.example.export.VideoExportManager = com.example.export.VideoExportManager(application)
 
     private val _uiState = MutableStateFlow(EditorUiState())
     val uiState: StateFlow<EditorUiState> = _uiState.asStateFlow()
 
-    private var playbackJob: Job? = null
     private var exportJob: Job? = null
 
+    // Undo / Redo history stacks (Max 20 snapshots)
+    private val undoStack = ArrayDeque<ProjectItem>()
+    private val redoStack = ArrayDeque<ProjectItem>()
+    private val MAX_HISTORY_SIZE = 20
+
     init {
-        // Initialize with default selected clip
-        val initialClip = _uiState.value.currentProject?.clips?.firstOrNull()?.id
-        _uiState.update { it.copy(selectedClipId = initialClip) }
+        viewModelScope.launch {
+            repository.seedInitialDataIfNeeded()
+            _uiState.update { it.copy(isDatabaseInitialized = true) }
+        }
+
+        viewModelScope.launch {
+            playerManager.playbackState.collect { playState ->
+                _uiState.update {
+                    it.copy(
+                        isPlaying = playState.isPlaying,
+                        currentPositionMs = playState.currentPositionMs,
+                        selectedClipId = playState.currentClipId ?: it.selectedClipId,
+                        feedbackMessage = playState.errorMessage ?: it.feedbackMessage
+                    )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            repository.getAllProjects().collect { projectList ->
+                _uiState.update { state ->
+                    val updatedCurrent = if (state.currentProject != null) {
+                        projectList.find { it.id == state.currentProject.id } ?: projectList.firstOrNull()
+                    } else {
+                        projectList.firstOrNull()
+                    }
+
+                    val updatedClip = if (state.selectedClipId != null && updatedCurrent != null) {
+                        if (updatedCurrent.clips.any { it.id == state.selectedClipId }) state.selectedClipId
+                        else updatedCurrent.clips.firstOrNull()?.id
+                    } else {
+                        updatedCurrent?.clips?.firstOrNull()?.id
+                    }
+
+                    if (updatedCurrent != null) {
+                        playerManager.setClipsAndAudios(updatedCurrent.clips, updatedCurrent.audios, initialSeekPlayhead = state.currentPositionMs)
+                    } else {
+                        playerManager.setClipsAndAudios(emptyList(), emptyList())
+                    }
+
+                    state.copy(
+                        projects = projectList,
+                        currentProject = updatedCurrent,
+                        selectedClipId = updatedClip
+                    )
+                }
+                _uiState.value.currentProject?.let { loadWaveformsForProject(it) }
+            }
+        }
     }
 
+    // ---------------- HISTORY MANAGEMENT (UNDO / REDO) ----------------
+
+    private fun pushUndoState(project: ProjectItem) {
+        if (undoStack.size >= MAX_HISTORY_SIZE) {
+            undoStack.removeFirst()
+        }
+        undoStack.addLast(project.deepCopy())
+        redoStack.clear()
+        updateHistoryUiFlags()
+    }
+
+    private fun updateHistoryUiFlags() {
+        _uiState.update {
+            it.copy(
+                canUndo = undoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty()
+            )
+        }
+    }
+
+    fun undo() {
+        val current = _uiState.value.currentProject ?: return
+        if (undoStack.isEmpty()) return
+
+        val previous = undoStack.removeLast()
+        if (redoStack.size >= MAX_HISTORY_SIZE) {
+            redoStack.removeFirst()
+        }
+        redoStack.addLast(current.deepCopy())
+
+        updateHistoryUiFlags()
+        applyRestoredProject(previous)
+        setFeedback("Ação desfeita")
+    }
+
+    fun redo() {
+        val current = _uiState.value.currentProject ?: return
+        if (redoStack.isEmpty()) return
+
+        val next = redoStack.removeLast()
+        if (undoStack.size >= MAX_HISTORY_SIZE) {
+            undoStack.removeFirst()
+        }
+        undoStack.addLast(current.deepCopy())
+
+        updateHistoryUiFlags()
+        applyRestoredProject(next)
+        setFeedback("Ação refeita")
+    }
+
+    private fun applyRestoredProject(project: ProjectItem) {
+        val total = TimelineUtils.calculateTotalProjectDuration(project.clips, project.audios)
+        val clampedPlayhead = _uiState.value.currentPositionMs.coerceIn(0L, total.coerceAtLeast(0L))
+        val selectedId = if (project.clips.any { it.id == _uiState.value.selectedClipId }) {
+            _uiState.value.selectedClipId
+        } else {
+            project.clips.firstOrNull()?.id
+        }
+
+        playerManager.setClipsAndAudios(project.clips, project.audios, initialSeekPlayhead = clampedPlayhead)
+
+        _uiState.update { state ->
+            val updatedProjects = state.projects.map { if (it.id == project.id) project else it }
+            state.copy(
+                currentProject = project,
+                projects = updatedProjects,
+                currentPositionMs = clampedPlayhead,
+                selectedClipId = selectedId
+            )
+        }
+
+        viewModelScope.launch {
+            repository.saveProject(project)
+        }
+    }
+
+    private fun commitProjectChange(newProject: ProjectItem, registerUndo: Boolean = true) {
+        val current = _uiState.value.currentProject
+        if (registerUndo && current != null) {
+            pushUndoState(current)
+        }
+        updateCurrentProject(newProject)
+    }
+
+    // ---------------- PLAYBACK & TIMELINE CALCULATIONS ----------------
+
     fun getTotalDurationMs(): Long {
-        val clips = _uiState.value.currentProject?.clips ?: return 10000L
-        val total = clips.sumOf { (it.durationMs / it.speed).toLong() }
-        return if (total > 0) total else 10000L
+        val proj = _uiState.value.currentProject ?: return 0L
+        return TimelineUtils.calculateTotalProjectDuration(proj.clips, proj.audios)
     }
 
     fun togglePlayback() {
-        val currentlyPlaying = _uiState.value.isPlaying
-        if (currentlyPlaying) {
+        if (playerManager.playbackState.value.isPlaying) {
             pausePlayback()
         } else {
             startPlayback()
         }
     }
 
-    private fun startPlayback() {
-        playbackJob?.cancel()
-        _uiState.update { it.copy(isPlaying = true) }
-        playbackJob = viewModelScope.launch {
-            val total = getTotalDurationMs()
-            while (_uiState.value.isPlaying) {
-                delay(50)
-                _uiState.update { state ->
-                    val next = state.currentPositionMs + 50
-                    if (next >= total) {
-                        state.copy(currentPositionMs = 0L, isPlaying = false)
-                    } else {
-                        state.copy(currentPositionMs = next)
-                    }
-                }
-            }
-        }
+    fun startPlayback() {
+        playerManager.play()
     }
 
     fun pausePlayback() {
-        playbackJob?.cancel()
-        _uiState.update { it.copy(isPlaying = false) }
+        playerManager.pause()
+    }
+
+    fun stopPlayback() {
+        playerManager.stop()
     }
 
     fun seekTo(positionMs: Long) {
-        val total = getTotalDurationMs()
-        val clamped = positionMs.coerceIn(0L, total)
-        _uiState.update { it.copy(currentPositionMs = clamped) }
+        playerManager.seekTo(positionMs)
+    }
+
+    fun rewind(stepMs: Long = 5000L) {
+        playerManager.rewind(stepMs)
+    }
+
+    fun forward(stepMs: Long = 5000L) {
+        playerManager.forward(stepMs)
+    }
+
+    fun previousClip() {
+        playerManager.previousClip()
+    }
+
+    fun nextClip() {
+        playerManager.nextClip()
     }
 
     fun setActivePanel(panel: ToolPanel) {
@@ -109,12 +273,26 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    fun selectClip(clipId: String) {
+    fun selectClip(clipId: String?, seekToClipStart: Boolean = false) {
         _uiState.update { it.copy(selectedClipId = clipId) }
+        if (seekToClipStart && clipId != null) {
+            val cur = _uiState.value.currentProject ?: return
+            val idx = cur.clips.indexOfFirst { it.id == clipId }
+            if (idx >= 0) {
+                val start = TimelineUtils.getClipStartTimelineMs(cur.clips, idx)
+                seekTo(start)
+            }
+        }
     }
 
     fun selectProject(project: ProjectItem) {
         pausePlayback()
+        undoStack.clear()
+        redoStack.clear()
+        updateHistoryUiFlags()
+
+        playerManager.setClipsAndAudios(project.clips, project.audios, initialSeekPlayhead = 0L)
+
         _uiState.update {
             it.copy(
                 currentProject = project,
@@ -125,56 +303,63 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    // ---------------- PROJECT CRUD ----------------
+
     fun createNewProject(title: String = "Novo Projeto", aspectRatio: AspectRatio = AspectRatio.RATIO_9_16) {
         val newProj = ProjectItem(
             id = "proj_" + UUID.randomUUID().toString().take(6),
             title = title,
-            duration = "00:15",
-            date = "Agora",
-            thumbUrl = "https://picsum.photos/seed/${System.currentTimeMillis()}/400/600",
+            duration = "00:00",
+            date = "Hoje",
+            thumbUrl = "",
             aspectRatio = aspectRatio,
-            clips = listOf(
-                MediaClip(
-                    id = "c_" + UUID.randomUUID().toString().take(5),
-                    title = "Clipe 1",
-                    uri = "https://picsum.photos/seed/clip1/600/800",
-                    durationMs = 15000L
-                )
-            )
+            clips = emptyList()
         )
+
+        undoStack.clear()
+        redoStack.clear()
+        updateHistoryUiFlags()
+
         _uiState.update { state ->
-            val updated = listOf(newProj) + state.projects
             state.copy(
-                projects = updated,
                 currentProject = newProj,
                 currentPositionMs = 0L,
-                selectedClipId = newProj.clips.firstOrNull()?.id,
+                selectedClipId = null,
                 activePanel = ToolPanel.NONE
             )
+        }
+
+        viewModelScope.launch {
+            repository.saveProject(newProj)
+            setFeedback("Projeto criado")
         }
     }
 
     fun createFromTemplate(template: VideoTemplateItem) {
+        val newProjId = "proj_tpl_" + UUID.randomUUID().toString().take(6)
         val clips = List(template.clipsCount) { index ->
             MediaClip(
                 id = "tpl_clip_${index}_" + UUID.randomUUID().toString().take(4),
                 title = "Cena ${index + 1}",
                 uri = "https://picsum.photos/seed/${template.id}_clip_$index/600/800",
                 durationMs = 4000L,
+                originalDurationMs = 4000L,
+                trimStartMs = 0L,
+                trimEndMs = 4000L,
                 transition = if (index > 0) "Fade" else null
             )
         }
         val newProj = ProjectItem(
-            id = "proj_tpl_" + UUID.randomUUID().toString().take(6),
+            id = newProjId,
             title = template.title,
             duration = template.duration,
-            date = "Agora",
+            date = "Hoje",
             thumbUrl = template.thumbUrl,
             aspectRatio = AspectRatio.RATIO_9_16,
             clips = clips,
             audios = listOf(
                 AudioTrackItem(
-                    id = "tpl_audio",
+                    id = "tpl_audio_" + UUID.randomUUID().toString().take(4),
                     name = "Beat Sync Track",
                     category = template.category,
                     duration = template.duration,
@@ -183,7 +368,7 @@ class EditorViewModel : ViewModel() {
             ),
             texts = listOf(
                 TextOverlayItem(
-                    id = "t_tpl",
+                    id = "t_tpl_" + UUID.randomUUID().toString().take(4),
                     text = template.title,
                     startTimeMs = 500L,
                     durationMs = 3000L,
@@ -191,33 +376,37 @@ class EditorViewModel : ViewModel() {
                 )
             )
         )
+
+        undoStack.clear()
+        redoStack.clear()
+        updateHistoryUiFlags()
+
         _uiState.update { state ->
             state.copy(
-                projects = listOf(newProj) + state.projects,
                 currentProject = newProj,
                 currentPositionMs = 0L,
                 selectedClipId = newProj.clips.firstOrNull()?.id,
                 activePanel = ToolPanel.NONE
             )
         }
+
+        viewModelScope.launch {
+            repository.saveProject(newProj)
+            setFeedback("Modelo carregado e salvo")
+        }
     }
 
     fun deleteProject(projectId: String) {
-        _uiState.update { state ->
-            val updated = state.projects.filterNot { it.id == projectId }
-            val nextCurrent = if (state.currentProject?.id == projectId) updated.firstOrNull() else state.currentProject
-            state.copy(projects = updated, currentProject = nextCurrent)
+        viewModelScope.launch {
+            repository.deleteProject(projectId)
+            setFeedback("Projeto excluído")
         }
     }
 
     fun duplicateProject(project: ProjectItem) {
-        val duplicated = project.copy(
-            id = "proj_copy_" + UUID.randomUUID().toString().take(6),
-            title = "${project.title} (Cópia)",
-            date = "Agora"
-        )
-        _uiState.update { state ->
-            state.copy(projects = listOf(duplicated) + state.projects)
+        viewModelScope.launch {
+            val duplicated = repository.duplicateProject(project)
+            setFeedback("Projeto duplicado com sucesso")
         }
     }
 
@@ -234,63 +423,328 @@ class EditorViewModel : ViewModel() {
             }
             state.copy(projects = updatedProjects, currentProject = updatedCurrent)
         }
+        viewModelScope.launch {
+            repository.renameProject(projectId, newTitle)
+            setFeedback("Projeto renomeado")
+        }
+    }
+
+    // ---------------- MEDIA IMPORT ----------------
+
+    fun importMediaUris(uris: List<android.net.Uri>) {
+        if (uris.isEmpty()) return
+        val cur = _uiState.value.currentProject ?: return
+        val projectId = cur.id
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isImportingMedia = true,
+                    importProgress = 0f,
+                    importStatusMessage = "Iniciando importação de ${uris.size} arquivos..."
+                )
+            }
+
+            var successCount = 0
+            var failCount = 0
+            val newClips = mutableListOf<MediaClip>()
+            val newAudios = mutableListOf<AudioTrackItem>()
+
+            uris.forEachIndexed { index, uri ->
+                _uiState.update {
+                    it.copy(
+                        importProgress = (index + 1).toFloat() / uris.size,
+                        importStatusMessage = "Processando ${index + 1} de ${uris.size}..."
+                    )
+                }
+
+                try {
+                    val stored = storageManager.copyUriToProjectMedia(projectId, uri)
+                    val meta = metadataExtractor.extractMetadata(
+                        projectId = projectId,
+                        file = stored.file,
+                        detectedMime = stored.mimeType
+                    )
+
+                    if (meta.mediaType == MediaType.AUDIO) {
+                        val totalSec = meta.durationMs / 1000
+                        val min = totalSec / 60
+                        val sec = totalSec % 60
+                        val formattedDuration = String.format("%02d:%02d", min, sec)
+
+                        val audio = AudioTrackItem(
+                            id = "audio_" + UUID.randomUUID().toString().take(6),
+                            name = stored.originalName,
+                            category = "Importado",
+                            duration = formattedDuration,
+                            durationMs = meta.durationMs,
+                            uri = stored.file.toURI().toString(),
+                            localPath = stored.file.absolutePath,
+                            originalName = stored.originalName,
+                            mimeType = meta.mimeType,
+                            fileSizeBytes = stored.sizeBytes
+                        )
+                        newAudios.add(audio)
+                    } else {
+                        val clip = MediaClip(
+                            id = "clip_" + UUID.randomUUID().toString().take(6),
+                            title = stored.originalName,
+                            uri = stored.file.toURI().toString(),
+                            type = meta.mediaType,
+                            localPath = stored.file.absolutePath,
+                            thumbnailPath = meta.thumbnailPath ?: stored.file.absolutePath,
+                            originalName = stored.originalName,
+                            mimeType = meta.mimeType,
+                            width = meta.width,
+                            height = meta.height,
+                            rotation = meta.rotation,
+                            fileSizeBytes = stored.sizeBytes,
+                            durationMs = meta.durationMs,
+                            originalDurationMs = meta.durationMs,
+                            trimStartMs = 0L,
+                            trimEndMs = meta.durationMs
+                        )
+                        newClips.add(clip)
+                    }
+                    successCount++
+                } catch (e: Exception) {
+                    failCount++
+                }
+            }
+
+            val latest = _uiState.value.currentProject
+            if (latest != null && (newClips.isNotEmpty() || newAudios.isNotEmpty())) {
+                val updatedProject = latest.copy(
+                    clips = latest.clips + newClips,
+                    audios = latest.audios + newAudios
+                )
+                commitProjectChange(updatedProject)
+            }
+
+            val feedback = when {
+                failCount == 0 -> "$successCount arquivo(s) importado(s) com sucesso!"
+                successCount > 0 -> "$successCount importado(s), $failCount arquivo(s) inválido(s)."
+                else -> "Falha ao importar arquivos selecionados."
+            }
+
+            _uiState.update {
+                it.copy(
+                    isImportingMedia = false,
+                    importProgress = 1f,
+                    importStatusMessage = null
+                )
+            }
+            setFeedback(feedback)
+        }
+    }
+
+    // ---------------- TIMELINE OPERATIONS (SPLIT, TRIM, REORDER) ----------------
+
+    fun splitClipAtPlayhead() {
+        val cur = _uiState.value.currentProject ?: return
+        if (cur.clips.isEmpty()) {
+            setFeedback("Não há clipes na timeline para dividir.")
+            return
+        }
+
+        val playhead = _uiState.value.currentPositionMs
+        val splitResult = TimelineUtils.splitClipAtPlayhead(cur.clips, playhead)
+        if (splitResult == null) {
+            setFeedback("Não é possível dividir muito próximo do início ou fim do clipe.")
+            return
+        }
+
+        val (updatedClips, newClipId) = splitResult
+        val updatedProject = cur.copy(clips = updatedClips)
+        commitProjectChange(updatedProject)
+
+        _uiState.update {
+            it.copy(selectedClipId = newClipId ?: it.selectedClipId)
+        }
+        setFeedback("Clipe dividido com precisão")
+    }
+
+    fun commitTrim(clipId: String, newTrimStartMs: Long, newTrimEndMs: Long) {
+        val cur = _uiState.value.currentProject ?: return
+        val clipIndex = cur.clips.indexOfFirst { it.id == clipId }
+        if (clipIndex == -1) return
+        val clip = cur.clips[clipIndex]
+        val trimmed = TimelineUtils.applyTrim(clip, newTrimStartMs, newTrimEndMs)
+        if (trimmed == null) {
+            setFeedback("Intervalo de corte inválido.")
+            return
+        }
+
+        val oldClipStartTimeline = TimelineUtils.getClipStartTimelineMs(cur.clips, clipIndex)
+        val oldClipDuration = TimelineUtils.calculateClipTimelineDuration(clip)
+        val oldClipEndTimeline = oldClipStartTimeline + oldClipDuration
+
+        val updatedClips = cur.clips.map { if (it.id == clipId) trimmed else it }
+        val updatedProject = cur.copy(clips = updatedClips)
+
+        val newClipStartTimeline = TimelineUtils.getClipStartTimelineMs(updatedClips, clipIndex)
+        val newClipDuration = TimelineUtils.calculateClipTimelineDuration(trimmed)
+        val newClipEndTimeline = newClipStartTimeline + newClipDuration
+        val newTotal = TimelineUtils.calculateProjectTimelineDuration(updatedClips)
+
+        val currentPos = _uiState.value.currentPositionMs
+
+        // Adjust playhead if inside the trimmed clip or beyond duration bounds
+        val newPlayhead = when {
+            currentPos in oldClipStartTimeline until oldClipEndTimeline -> {
+                // Playhead was inside this clip before trim
+                val oldOffset = currentPos - oldClipStartTimeline
+                val oldSpeed = TimelineUtils.getSafeSpeed(clip)
+                val oldSourcePos = TimelineUtils.getEffectiveTrimStart(clip) + (oldOffset * oldSpeed).toLong()
+
+                when {
+                    oldSourcePos < trimmed.trimStartMs -> {
+                        // Playhead was in the part trimmed away at start -> move to new start of clip
+                        newClipStartTimeline
+                    }
+                    oldSourcePos > trimmed.trimEndMs -> {
+                        // Playhead was in the part trimmed away at end -> move to new end of clip
+                        newClipEndTimeline.coerceAtMost(newTotal)
+                    }
+                    else -> {
+                        // Map preserved source position to new timeline position
+                        val newOffset = ((oldSourcePos - trimmed.trimStartMs).toFloat() / TimelineUtils.getSafeSpeed(trimmed)).toLong()
+                        (newClipStartTimeline + newOffset).coerceIn(newClipStartTimeline, newClipEndTimeline)
+                    }
+                }
+            }
+            currentPos >= oldClipEndTimeline -> {
+                // Playhead was in a subsequent clip; shift by delta duration
+                val delta = newClipDuration - oldClipDuration
+                (currentPos + delta).coerceIn(0L, newTotal)
+            }
+            else -> {
+                // Playhead was before this clip; stays unchanged
+                currentPos.coerceIn(0L, newTotal)
+            }
+        }
+
+        commitProjectChange(updatedProject)
+        seekTo(newPlayhead)
+        setFeedback("Corte aplicado")
+    }
+
+    fun duplicateClip(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val result = TimelineUtils.duplicateClip(cur.clips, targetId) ?: return
+        val (updatedClips, newClipId) = result
+        val updatedProject = cur.copy(clips = updatedClips)
+        commitProjectChange(updatedProject)
+        _uiState.update { it.copy(selectedClipId = newClipId) }
+        setFeedback("Clipe duplicado com sucesso")
+    }
+
+    fun reorderClip(fromIndex: Int, toIndex: Int) {
+        val cur = _uiState.value.currentProject ?: return
+        val updatedClips = TimelineUtils.reorderClips(cur.clips, fromIndex, toIndex)
+        if (updatedClips == cur.clips) return
+
+        val updatedProject = cur.copy(clips = updatedClips)
+        commitProjectChange(updatedProject)
+        setFeedback("Clipe reordenado")
+    }
+
+    fun moveClipLeft(clipId: String) {
+        val cur = _uiState.value.currentProject ?: return
+        val index = cur.clips.indexOfFirst { it.id == clipId }
+        if (index > 0) {
+            reorderClip(index, index - 1)
+        }
+    }
+
+    fun moveClipRight(clipId: String) {
+        val cur = _uiState.value.currentProject ?: return
+        val index = cur.clips.indexOfFirst { it.id == clipId }
+        if (index != -1 && index < cur.clips.lastIndex) {
+            reorderClip(index, index + 1)
+        }
     }
 
     fun addClips(newClips: List<MediaClip>) {
         val cur = _uiState.value.currentProject ?: return
         val updatedClips = cur.clips + newClips
         val updatedProject = cur.copy(clips = updatedClips)
-        updateCurrentProject(updatedProject)
+        commitProjectChange(updatedProject)
     }
 
-    fun deleteSelectedClip() {
+    fun deleteClip(clipId: String? = null) {
         val cur = _uiState.value.currentProject ?: return
-        val selId = _uiState.value.selectedClipId ?: return
-        if (cur.clips.size <= 1) {
-            setFeedback("O projeto precisa ter pelo menos um clipe.")
-            return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val index = cur.clips.indexOfFirst { it.id == targetId }
+        if (index == -1) return
+
+        val clipToDelete = cur.clips[index]
+        val clipStart = TimelineUtils.getClipStartTimelineMs(cur.clips, index)
+        val clipDuration = TimelineUtils.calculateClipTimelineDuration(clipToDelete)
+        val clipEnd = clipStart + clipDuration
+
+        val updatedClips = TimelineUtils.removeClip(cur.clips, index)
+        val newTotal = TimelineUtils.calculateProjectTimelineDuration(updatedClips)
+        val currentPos = _uiState.value.currentPositionMs
+
+        // Calculate new playhead position
+        val newPlayhead = when {
+            updatedClips.isEmpty() -> 0L
+            currentPos in clipStart until clipEnd -> {
+                // Was inside deleted clip -> position at start of this clip slot
+                clipStart.coerceIn(0L, newTotal)
+            }
+            currentPos >= clipEnd -> {
+                // Was after deleted clip -> shift backward by deleted clip duration
+                (currentPos - clipDuration).coerceIn(0L, newTotal)
+            }
+            else -> {
+                // Was before deleted clip -> keep currentPos
+                currentPos.coerceIn(0L, newTotal)
+            }
         }
-        val updatedClips = cur.clips.filterNot { it.id == selId }
+
+        // Determine new selected clip
+        val newSelectedId = when {
+            updatedClips.isEmpty() -> null
+            index < updatedClips.size -> updatedClips[index].id
+            else -> updatedClips.last().id
+        }
+
         val updatedProject = cur.copy(clips = updatedClips)
+        commitProjectChange(updatedProject)
+
         _uiState.update {
             it.copy(
-                currentProject = updatedProject,
-                selectedClipId = updatedClips.firstOrNull()?.id
+                selectedClipId = newSelectedId,
+                currentPositionMs = newPlayhead
             )
+        }
+
+        if (updatedClips.isEmpty()) {
+            playerManager.stop()
+        } else {
+            seekTo(newPlayhead)
         }
         setFeedback("Clipe removido")
     }
 
-    fun splitClipAtPlayhead() {
-        val cur = _uiState.value.currentProject ?: return
-        val selId = _uiState.value.selectedClipId ?: cur.clips.firstOrNull()?.id ?: return
-        val clip = cur.clips.find { it.id == selId } ?: return
-
-        val halfDuration = clip.durationMs / 2
-        val clipPart1 = clip.copy(
-            durationMs = halfDuration,
-            title = "${clip.title} (Parte 1)"
-        )
-        val clipPart2 = clip.copy(
-            id = "clip_split_" + UUID.randomUUID().toString().take(5),
-            durationMs = halfDuration,
-            title = "${clip.title} (Parte 2)"
-        )
-
-        val updatedClips = cur.clips.flatMap {
-            if (it.id == selId) listOf(clipPart1, clipPart2) else listOf(it)
-        }
-        updateCurrentProject(cur.copy(clips = updatedClips))
-        setFeedback("Clipe dividido com sucesso")
+    fun deleteSelectedClip() {
+        deleteClip(null)
     }
 
     fun updateClipSpeed(speed: Float) {
         val cur = _uiState.value.currentProject ?: return
         val selId = _uiState.value.selectedClipId ?: return
-        val updatedClips = cur.clips.map {
-            if (it.id == selId) it.copy(speed = speed) else it
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == selId) {
+                val updatedClip = clip.copy(speed = speed)
+                val newDuration = TimelineUtils.calculateClipTimelineDuration(updatedClip)
+                updatedClip.copy(durationMs = newDuration)
+            } else clip
         }
-        updateCurrentProject(cur.copy(clips = updatedClips))
+        commitProjectChange(cur.copy(clips = updatedClips))
     }
 
     fun updateClipFilter(filter: String) {
@@ -299,7 +753,18 @@ class EditorViewModel : ViewModel() {
         val updatedClips = cur.clips.map {
             if (it.id == selId) it.copy(filter = filter) else it
         }
-        updateCurrentProject(cur.copy(clips = updatedClips, activeFilter = filter))
+        commitProjectChange(cur.copy(clips = updatedClips, activeFilter = filter))
+        setFeedback("Filtro '$filter' aplicado")
+    }
+
+    fun removeClipFilter(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map {
+            if (it.id == targetId) it.copy(filter = "Original") else it
+        }
+        commitProjectChange(cur.copy(clips = updatedClips, activeFilter = "Original"))
+        setFeedback("Filtro removido")
     }
 
     fun updateClipAdjustments(brightness: Float, contrast: Float, saturation: Float) {
@@ -307,57 +772,460 @@ class EditorViewModel : ViewModel() {
         val selId = _uiState.value.selectedClipId ?: return
         val updatedClips = cur.clips.map {
             if (it.id == selId) it.copy(
-                brightness = brightness,
-                contrast = contrast,
-                saturation = saturation
+                brightness = brightness.coerceIn(-100f, 100f),
+                contrast = contrast.coerceIn(-100f, 100f),
+                saturation = saturation.coerceIn(-100f, 100f)
             ) else it
         }
-        updateCurrentProject(cur.copy(clips = updatedClips))
+        commitProjectChange(cur.copy(clips = updatedClips))
     }
 
-    fun updateClipTransition(transitionName: String?) {
+    fun resetClipAdjustments(clipId: String? = null) {
         val cur = _uiState.value.currentProject ?: return
-        val selId = _uiState.value.selectedClipId ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
         val updatedClips = cur.clips.map {
-            if (it.id == selId) it.copy(transition = transitionName) else it
+            if (it.id == targetId) it.copy(
+                brightness = 0f,
+                contrast = 0f,
+                saturation = 0f
+            ) else it
         }
-        updateCurrentProject(cur.copy(clips = updatedClips))
-        setFeedback(if (transitionName != null) "Transição $transitionName aplicada" else "Transição removida")
+        commitProjectChange(cur.copy(clips = updatedClips))
+        setFeedback("Ajustes redefinidos")
+    }
+
+    // ---------------- SPATIAL TRANSFORMATIONS ----------------
+
+    fun updateClipTransform(
+        scale: Float? = null,
+        rotation: Float? = null,
+        flipHorizontal: Boolean? = null,
+        flipVertical: Boolean? = null,
+        opacity: Float? = null,
+        positionX: Float? = null,
+        positionY: Float? = null,
+        clipId: String? = null
+    ) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == targetId) {
+                clip.copy(
+                    scale = scale?.coerceIn(0.2f, 4.0f) ?: clip.scale,
+                    rotation = rotation ?: clip.rotation,
+                    flipHorizontal = flipHorizontal ?: clip.flipHorizontal,
+                    flipVertical = flipVertical ?: clip.flipVertical,
+                    opacity = opacity?.coerceIn(0f, 1f) ?: clip.opacity,
+                    positionX = positionX ?: clip.positionX,
+                    positionY = positionY ?: clip.positionY
+                )
+            } else clip
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+    }
+
+    fun rotateClip90(clockwise: Boolean = true, clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val targetClip = cur.clips.find { it.id == targetId } ?: return
+        val delta = if (clockwise) 90f else -90f
+        val newRotation = (targetClip.rotation + delta) % 360f
+        updateClipTransform(rotation = newRotation, clipId = targetId)
+        setFeedback("Girar: ${newRotation.toInt()}°")
+    }
+
+    fun toggleFlipHorizontal(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val targetClip = cur.clips.find { it.id == targetId } ?: return
+        val newFlip = !targetClip.flipHorizontal
+        updateClipTransform(flipHorizontal = newFlip, clipId = targetId)
+        setFeedback(if (newFlip) "Espelhado horizontalmente" else "Espelhamento horizontal removido")
+    }
+
+    fun toggleFlipVertical(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val targetClip = cur.clips.find { it.id == targetId } ?: return
+        val newFlip = !targetClip.flipVertical
+        updateClipTransform(flipVertical = newFlip, clipId = targetId)
+        setFeedback(if (newFlip) "Espelhado verticalmente" else "Espelhamento vertical removido")
+    }
+
+    fun resetClipTransform(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == targetId) {
+                clip.copy(
+                    scale = 1.0f,
+                    rotation = 0f,
+                    flipHorizontal = false,
+                    flipVertical = false,
+                    opacity = 1.0f,
+                    positionX = 0f,
+                    positionY = 0f
+                )
+            } else clip
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        setFeedback("Transformações redefinidas")
+    }
+
+    fun updateClipTransition(transitionName: String?, durationMs: Long? = null, clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map {
+            if (it.id == targetId) {
+                it.copy(
+                    transition = transitionName,
+                    transitionDurationMs = durationMs ?: it.transitionDurationMs
+                )
+            } else it
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        setFeedback(if (transitionName != null) "Transição '$transitionName' aplicada" else "Transição removida")
+    }
+
+    fun updateClipTransitionDuration(durationMs: Long, clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map {
+            if (it.id == targetId) it.copy(transitionDurationMs = durationMs.coerceAtLeast(100L)) else it
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
     }
 
     fun setAspectRatio(aspectRatio: AspectRatio) {
         val cur = _uiState.value.currentProject ?: return
-        updateCurrentProject(cur.copy(aspectRatio = aspectRatio))
+        commitProjectChange(cur.copy(aspectRatio = aspectRatio))
+    }
+
+    // ---------------- TEXT OVERLAY MANAGEMENT ----------------
+
+    fun selectTextOverlay(id: String?) {
+        _uiState.update { it.copy(selectedTextId = id, selectedStickerId = null) }
     }
 
     fun addTextOverlay(text: String, colorHex: String = "#FFFFFF") {
         if (text.isBlank()) return
         val cur = _uiState.value.currentProject ?: return
         val newText = TextOverlayItem(
-            id = "txt_" + UUID.randomUUID().toString().take(5),
+            id = "txt_" + UUID.randomUUID().toString().take(6),
             text = text,
             startTimeMs = _uiState.value.currentPositionMs,
             durationMs = 4000L,
             colorHex = colorHex
         )
-        updateCurrentProject(cur.copy(texts = cur.texts + newText))
+        commitProjectChange(cur.copy(texts = cur.texts + newText))
+        _uiState.update { it.copy(selectedTextId = newText.id) }
         setFeedback("Texto adicionado")
+    }
+
+    fun addTextOverlayItem(item: TextOverlayItem) {
+        val cur = _uiState.value.currentProject ?: return
+        commitProjectChange(cur.copy(texts = cur.texts + item))
+        _uiState.update { it.copy(selectedTextId = item.id) }
+        setFeedback("Texto adicionado")
+    }
+
+    fun applyTextTemplate(template: com.example.template.TextTemplate, customText: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val newItem = template.createOverlayItem(
+            customText = customText,
+            startTimeMs = _uiState.value.currentPositionMs,
+            durationMs = 4000L
+        )
+        commitProjectChange(cur.copy(texts = cur.texts + newItem))
+        _uiState.update { it.copy(selectedTextId = newItem.id) }
+        setFeedback("Template '${template.name}' aplicado")
+    }
+
+    fun updateTextOverlayPosition(id: String, posX: Float, posY: Float) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.texts.map {
+            if (it.id == id) it.copy(posX = posX.coerceIn(0.05f, 0.95f), posY = posY.coerceIn(0.05f, 0.95f)) else it
+        }
+        commitProjectChange(cur.copy(texts = updated), registerUndo = false)
+    }
+
+    fun updateTextOverlayScale(id: String, scale: Float) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.texts.map {
+            if (it.id == id) it.copy(scale = scale.coerceIn(0.3f, 3.5f)) else it
+        }
+        commitProjectChange(cur.copy(texts = updated))
+    }
+
+    fun updateTextOverlayRotation(id: String, rotation: Float) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.texts.map {
+            if (it.id == id) it.copy(rotation = rotation) else it
+        }
+        commitProjectChange(cur.copy(texts = updated))
+    }
+
+    fun updateTextOverlayTiming(id: String, startTimeMs: Long, durationMs: Long) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.texts.map {
+            if (it.id == id) it.copy(
+                startTimeMs = startTimeMs.coerceAtLeast(0L),
+                durationMs = durationMs.coerceAtLeast(200L)
+            ) else it
+        }
+        commitProjectChange(cur.copy(texts = updated))
+    }
+
+    fun updateTextOverlayContent(id: String, newText: String) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.texts.map {
+            if (it.id == id) it.copy(text = newText) else it
+        }
+        commitProjectChange(cur.copy(texts = updated))
+    }
+
+    fun updateTextOverlayStyle(
+        id: String,
+        colorHex: String? = null,
+        bgHex: String? = null,
+        clearBg: Boolean = false,
+        fontSizeSp: Float? = null,
+        alignment: String? = null,
+        fontFamily: String? = null,
+        strokeColorHex: String? = null,
+        strokeWidth: Float? = null,
+        shadowColorHex: String? = null,
+        shadowRadius: Float? = null
+    ) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.texts.map {
+            if (it.id == id) {
+                it.copy(
+                    colorHex = colorHex ?: it.colorHex,
+                    bgHex = if (clearBg) null else (bgHex ?: it.bgHex),
+                    fontSizeSp = fontSizeSp ?: it.fontSizeSp,
+                    alignment = alignment ?: it.alignment,
+                    fontFamily = fontFamily ?: it.fontFamily,
+                    strokeColorHex = strokeColorHex ?: it.strokeColorHex,
+                    strokeWidth = strokeWidth ?: it.strokeWidth,
+                    shadowColorHex = shadowColorHex ?: it.shadowColorHex,
+                    shadowRadius = shadowRadius ?: it.shadowRadius
+                )
+            } else it
+        }
+        commitProjectChange(cur.copy(texts = updated))
+    }
+
+    fun updateTextOverlayAnimation(
+        id: String,
+        animationIn: String? = null,
+        animationOut: String? = null,
+        textAnimationMode: String? = null,
+        animationDurationMs: Long? = null
+    ) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.texts.map {
+            if (it.id == id) {
+                it.copy(
+                    animationIn = animationIn ?: it.animationIn,
+                    animationOut = animationOut ?: it.animationOut,
+                    textAnimationMode = textAnimationMode ?: it.textAnimationMode,
+                    animationDurationMs = animationDurationMs ?: it.animationDurationMs
+                )
+            } else it
+        }
+        commitProjectChange(cur.copy(texts = updated))
     }
 
     fun removeTextOverlay(id: String) {
         val cur = _uiState.value.currentProject ?: return
-        updateCurrentProject(cur.copy(texts = cur.texts.filterNot { it.id == id }))
+        val updated = cur.texts.filterNot { it.id == id }
+        commitProjectChange(cur.copy(texts = updated))
+        if (_uiState.value.selectedTextId == id) {
+            _uiState.update { it.copy(selectedTextId = null) }
+        }
+        setFeedback("Texto removido")
+    }
+
+    // ---------------- STICKER & GIF MANAGEMENT ----------------
+
+    fun selectSticker(id: String?) {
+        _uiState.update { it.copy(selectedStickerId = id, selectedTextId = null) }
+    }
+
+    fun addSticker(sticker: StickerItem) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.stickers + sticker
+        commitProjectChange(cur.copy(stickers = updated))
+        _uiState.update { it.copy(selectedStickerId = sticker.id) }
+        setFeedback(if (sticker.isGif) "GIF adicionado" else "Sticker adicionado")
+    }
+
+    fun updateStickerPosition(id: String, posX: Float, posY: Float) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.stickers.map {
+            if (it.id == id) it.copy(posX = posX.coerceIn(0.05f, 0.95f), posY = posY.coerceIn(0.05f, 0.95f)) else it
+        }
+        commitProjectChange(cur.copy(stickers = updated), registerUndo = false)
+    }
+
+    fun updateStickerScale(id: String, scale: Float) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.stickers.map {
+            if (it.id == id) it.copy(scale = scale.coerceIn(0.3f, 3.5f)) else it
+        }
+        commitProjectChange(cur.copy(stickers = updated))
+    }
+
+    fun updateStickerRotation(id: String, rotation: Float) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.stickers.map {
+            if (it.id == id) it.copy(rotation = rotation) else it
+        }
+        commitProjectChange(cur.copy(stickers = updated))
+    }
+
+    fun updateStickerTiming(id: String, startTimeMs: Long, durationMs: Long) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.stickers.map {
+            if (it.id == id) it.copy(
+                startTimeMs = startTimeMs.coerceAtLeast(0L),
+                durationMs = durationMs.coerceAtLeast(200L)
+            ) else it
+        }
+        commitProjectChange(cur.copy(stickers = updated))
+    }
+
+    fun updateStickerAnimation(
+        id: String,
+        animationIn: String? = null,
+        animationOut: String? = null,
+        animationDurationMs: Long? = null
+    ) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.stickers.map {
+            if (it.id == id) {
+                it.copy(
+                    animationIn = animationIn ?: it.animationIn,
+                    animationOut = animationOut ?: it.animationOut,
+                    animationDurationMs = animationDurationMs ?: it.animationDurationMs
+                )
+            } else it
+        }
+        commitProjectChange(cur.copy(stickers = updated))
+    }
+
+    fun removeSticker(id: String) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.stickers.filterNot { it.id == id }
+        commitProjectChange(cur.copy(stickers = updated))
+        if (_uiState.value.selectedStickerId == id) {
+            _uiState.update { it.copy(selectedStickerId = null) }
+        }
+        setFeedback("Sticker removido")
+    }
+
+    // ---------------- MULTI-TRACK AUDIO MANAGEMENT ----------------
+
+    fun selectAudioTrack(id: String?) {
+        _uiState.update { it.copy(selectedAudioTrackId = id) }
     }
 
     fun addAudioTrack(track: AudioTrackItem) {
         val cur = _uiState.value.currentProject ?: return
-        updateCurrentProject(cur.copy(audios = listOf(track)))
+        val updatedAudios = cur.audios + track
+        commitProjectChange(cur.copy(audios = updatedAudios))
+        _uiState.update { it.copy(selectedAudioTrackId = track.id) }
+        loadWaveformForTrack(track)
         setFeedback("Áudio '${track.name}' adicionado")
     }
 
     fun removeAudioTrack(id: String) {
         val cur = _uiState.value.currentProject ?: return
-        updateCurrentProject(cur.copy(audios = cur.audios.filterNot { it.id == id }))
+        val updatedAudios = cur.audios.filterNot { it.id == id }
+        val newSelected = if (_uiState.value.selectedAudioTrackId == id) {
+            updatedAudios.firstOrNull()?.id
+        } else {
+            _uiState.value.selectedAudioTrackId
+        }
+        commitProjectChange(cur.copy(audios = updatedAudios))
+        _uiState.update { it.copy(selectedAudioTrackId = newSelected) }
+        setFeedback("Faixa de áudio removida")
+    }
+
+    fun updateAudioTrackVolume(trackId: String, volume: Float) {
+        val cur = _uiState.value.currentProject ?: return
+        val updatedAudios = cur.audios.map {
+            if (it.id == trackId) TimelineUtils.setAudioTrackVolume(it, volume) else it
+        }
+        val isMuted = updatedAudios.firstOrNull { it.id == trackId }?.isMuted ?: false
+        playerManager.audioSyncManager.updateTrackVolumeAndMute(trackId, volume, isMuted)
+        commitProjectChange(cur.copy(audios = updatedAudios))
+    }
+
+    fun toggleAudioTrackMute(trackId: String) {
+        val cur = _uiState.value.currentProject ?: return
+        val updatedAudios = cur.audios.map {
+            if (it.id == trackId) TimelineUtils.toggleAudioTrackMute(it) else it
+        }
+        val track = updatedAudios.firstOrNull { it.id == trackId }
+        if (track != null) {
+            playerManager.audioSyncManager.updateTrackVolumeAndMute(trackId, track.volume, track.isMuted)
+        }
+        commitProjectChange(cur.copy(audios = updatedAudios))
+        setFeedback(if (track?.isMuted == true) "Faixa silenciada" else "Faixa ativada")
+    }
+
+    fun updateAudioTrackPosition(trackId: String, newTimelineStartMs: Long) {
+        val cur = _uiState.value.currentProject ?: return
+        val updatedAudios = cur.audios.map {
+            if (it.id == trackId) TimelineUtils.moveAudioTrackTimelineStart(it, newTimelineStartMs) else it
+        }
+        commitProjectChange(cur.copy(audios = updatedAudios))
+    }
+
+    fun updateAudioTrackTrim(trackId: String, trimStartMs: Long, trimEndMs: Long) {
+        val cur = _uiState.value.currentProject ?: return
+        val updatedAudios = cur.audios.map {
+            if (it.id == trackId) {
+                TimelineUtils.applyAudioTrim(it, trimStartMs, trimEndMs) ?: it
+            } else it
+        }
+        commitProjectChange(cur.copy(audios = updatedAudios))
+    }
+
+    fun splitAudioTrackAtPlayhead(trackId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = trackId ?: _uiState.value.selectedAudioTrackId ?: cur.audios.firstOrNull()?.id ?: return
+        val playhead = _uiState.value.currentPositionMs
+        val (updatedTracks, newTrackId) = TimelineUtils.splitAudioTrackAtPlayhead(cur.audios, targetId, playhead)
+        if (newTrackId != null) {
+            commitProjectChange(cur.copy(audios = updatedTracks))
+            _uiState.update { it.copy(selectedAudioTrackId = newTrackId) }
+            val newTrack = updatedTracks.firstOrNull { it.id == newTrackId }
+            if (newTrack != null) {
+                loadWaveformForTrack(newTrack)
+            }
+            setFeedback("Áudio dividido no playhead")
+        } else {
+            setFeedback("Posição inválida para dividir o áudio")
+        }
+    }
+
+    fun loadWaveformsForProject(project: ProjectItem) {
+        project.audios.forEach { track ->
+            loadWaveformForTrack(track)
+        }
+    }
+
+    fun loadWaveformForTrack(track: AudioTrackItem) {
+        if (_uiState.value.waveforms.containsKey(track.id)) return
+        viewModelScope.launch {
+            val samples = waveformGenerator.getWaveform(track.localPath, sampleCount = 60)
+            _uiState.update {
+                it.copy(waveforms = it.waveforms + (track.id to samples))
+            }
+        }
     }
 
     fun toggleVFX(vfx: VFXEffectItem) {
@@ -368,7 +1236,23 @@ class EditorViewModel : ViewModel() {
         } else {
             cur.activeVFX + vfx
         }
-        updateCurrentProject(cur.copy(activeVFX = updated))
+        commitProjectChange(cur.copy(activeVFX = updated))
+        setFeedback(if (!exists) "Efeito '${vfx.name}' ativado" else "Efeito '${vfx.name}' desativado")
+    }
+
+    fun updateVfxIntensity(vfxId: String, intensity: Float) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.activeVFX.map {
+            if (it.id == vfxId) it.copy(intensity = intensity.coerceIn(0f, 100f)) else it
+        }
+        commitProjectChange(cur.copy(activeVFX = updated))
+    }
+
+    fun clearAllVFX() {
+        val cur = _uiState.value.currentProject ?: return
+        if (cur.activeVFX.isEmpty()) return
+        commitProjectChange(cur.copy(activeVFX = emptyList()))
+        setFeedback("Todos os efeitos foram desativados")
     }
 
     fun generateCaptions(language: String) {
@@ -378,8 +1262,12 @@ class EditorViewModel : ViewModel() {
             SubtitleSegmentItem("sub2", "Hoje vamos explorar lugares incríveis.", 4000L, 8000L),
             SubtitleSegmentItem("sub3", "Não se esqueça de curtir e compartilhar!", 8500L, 12000L)
         )
-        updateCurrentProject(cur.copy(subtitles = generated))
+        commitProjectChange(cur.copy(subtitles = generated))
         setFeedback("Legendas geradas em $language com IA")
+    }
+
+    fun generateAutoCaptions(language: String = "pt-BR") {
+        generateCaptions(language)
     }
 
     fun updateSubtitle(id: String, newText: String) {
@@ -387,12 +1275,12 @@ class EditorViewModel : ViewModel() {
         val updated = cur.subtitles.map {
             if (it.id == id) it.copy(text = newText) else it
         }
-        updateCurrentProject(cur.copy(subtitles = updated))
+        commitProjectChange(cur.copy(subtitles = updated))
     }
 
     fun deleteSubtitle(id: String) {
         val cur = _uiState.value.currentProject ?: return
-        updateCurrentProject(cur.copy(subtitles = cur.subtitles.filterNot { it.id == id }))
+        commitProjectChange(cur.copy(subtitles = cur.subtitles.filterNot { it.id == id }))
     }
 
     private fun updateCurrentProject(project: ProjectItem) {
@@ -402,46 +1290,163 @@ class EditorViewModel : ViewModel() {
             }
             state.copy(currentProject = project, projects = updatedProjects)
         }
+        playerManager.setClipsAndAudios(project.clips, project.audios)
+        loadWaveformsForProject(project)
+        viewModelScope.launch {
+            repository.saveProject(project)
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        playerManager.release()
     }
 
     fun startExport(options: ExportOptions) {
         exportJob?.cancel()
+        val current = _uiState.value.currentProject ?: return
+
+        val resolution = com.example.export.ExportResolution.fromLabel(options.resolution)
+        val exportConfig = com.example.export.VideoExportConfig(
+            resolution = resolution,
+            aspectRatio = current.aspectRatio,
+            fps = options.frameRate,
+            quality = options.quality,
+            removeWatermark = options.removeWatermark || _uiState.value.isPremiumUser
+        )
+
         _uiState.update {
             it.copy(
                 isExporting = true,
                 exportProgress = 0f,
                 exportSuccess = false,
+                exportStatusMessage = "Iniciando exportação...",
                 selectedExportOptions = options
             )
         }
+
         exportJob = viewModelScope.launch {
-            for (step in 1..20) {
-                delay(150)
-                val progress = step / 20f
-                _uiState.update { it.copy(exportProgress = progress) }
-            }
-            _uiState.update {
-                it.copy(
-                    isExporting = false,
-                    exportSuccess = true,
-                    lastExportedFile = "Boti_Export_${System.currentTimeMillis()}.mp4"
+            try {
+                val result = exportManager.exportProject(
+                    project = current,
+                    config = exportConfig,
+                    onProgress = { progress ->
+                        _uiState.update {
+                            it.copy(
+                                exportProgress = progress.progress,
+                                exportStatusMessage = progress.message
+                            )
+                        }
+                    }
                 )
+
+                if (result.success && result.outputFile != null) {
+                    _uiState.update {
+                        it.copy(
+                            isExporting = false,
+                            exportSuccess = true,
+                            exportProgress = 1.0f,
+                            lastExportedFile = result.outputFile.name,
+                            lastExportedFilePath = result.outputFile.absolutePath,
+                            exportStatusMessage = "Vídeo MP4 salvo com sucesso!"
+                        )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            isExporting = false,
+                            exportSuccess = false,
+                            feedbackMessage = result.errorMessage ?: "Falha ao exportar vídeo"
+                        )
+                    }
+                }
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                _uiState.update { it.copy(isExporting = false, exportProgress = 0f, exportStatusMessage = null) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isExporting = false,
+                        exportSuccess = false,
+                        feedbackMessage = "Erro ao exportar: ${e.message}"
+                    )
+                }
             }
         }
     }
 
     fun cancelExport() {
         exportJob?.cancel()
-        _uiState.update { it.copy(isExporting = false, exportProgress = 0f) }
+        _uiState.update { it.copy(isExporting = false, exportProgress = 0f, exportStatusMessage = null) }
+        setFeedback("Exportação cancelada.")
     }
 
     fun resetExportState() {
-        _uiState.update { it.copy(exportSuccess = false, isExporting = false, exportProgress = 0f) }
+        _uiState.update { it.copy(exportSuccess = false, isExporting = false, exportProgress = 0f, exportStatusMessage = null) }
     }
 
     fun subscribePremium() {
         _uiState.update { it.copy(isPremiumUser = true) }
         setFeedback("Parabéns! Boti Pro ativado com sucesso.")
+    }
+
+    fun setPremiumUser(isPremium: Boolean = true) {
+        _uiState.update { it.copy(isPremiumUser = isPremium) }
+        if (isPremium) {
+            setFeedback("Parabéns! Boti Pro ativado com sucesso.")
+        }
+    }
+
+    fun openVideoInExternalPlayer(context: android.content.Context, filePath: String) {
+        val file = java.io.File(filePath)
+        if (!file.exists()) {
+            setFeedback("Arquivo de vídeo não encontrado.")
+            return
+        }
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "video/mp4")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val chooser = android.content.Intent.createChooser(intent, "Abrir vídeo com...").apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            setFeedback("Não foi possível abrir o player externo: ${e.message}")
+        }
+    }
+
+    fun shareVideo(context: android.content.Context, filePath: String) {
+        val file = java.io.File(filePath)
+        if (!file.exists()) {
+            setFeedback("Arquivo de vídeo não encontrado.")
+            return
+        }
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "video/mp4"
+                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val chooser = android.content.Intent.createChooser(intent, "Compartilhar vídeo").apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            setFeedback("Erro ao compartilhar vídeo: ${e.message}")
+        }
     }
 
     fun setFeedback(msg: String) {
@@ -451,4 +1456,18 @@ class EditorViewModel : ViewModel() {
             _uiState.update { if (it.feedbackMessage == msg) it.copy(feedbackMessage = null) else it }
         }
     }
+}
+
+// ---------------- DEEP COPY EXTENSION ----------------
+
+fun ProjectItem.deepCopy(): ProjectItem {
+    return this.copy(
+        clips = this.clips.map { it.copy() },
+        audios = this.audios.map { it.copy() },
+        texts = this.texts.map { it.copy() },
+        stickers = this.stickers.map { it.copy() },
+        subtitles = this.subtitles.map { it.copy() },
+        activeVFX = this.activeVFX.map { it.copy() },
+        transitions = this.transitions.map { it.copy() }
+    )
 }

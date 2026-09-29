@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,13 +23,15 @@ import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 import com.example.viewmodel.EditorViewModel
 
+/**
+ * Tela 14: CONFIGURAÇÕES - Refinada conforme layout app.png
+ */
 @Composable
 fun SettingsScreen(
     viewModel: EditorViewModel,
     onNavigateBack: () -> Unit
 ) {
-    var hardwareAcc by remember { mutableStateOf(true) }
-    var cacheCleaned by remember { mutableStateOf(false) }
+    var autoSave by remember { mutableStateOf(true) }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -50,7 +53,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Configurações",
-                    fontSize = 18.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
@@ -62,114 +65,137 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            // General
-            Text("Geral", color = PrimaryPurpleVariant, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            // Seção Geral
+            Text(
+                text = "Geral",
+                color = TextSecondary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp
+            )
             Spacer(modifier = Modifier.height(8.dp))
-            Card(
+            Surface(
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceElevated)
+                color = SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    SettingRow(
-                        icon = Icons.Default.Language,
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                    SettingItemRow(
                         title = "Idioma",
                         value = "Português (Brasil)"
                     )
-                    Divider(color = BorderSubtle, modifier = Modifier.padding(vertical = 10.dp))
-                    SettingRow(
-                        icon = Icons.Default.DarkMode,
+                    HorizontalDivider(color = BorderSubtle)
+                    SettingItemRow(
                         title = "Tema",
-                        value = "Escuro Studio"
+                        value = "Escuro"
                     )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Performance & Render
-            Text("Renderização & Hardware", color = PrimaryPurpleVariant, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceElevated)
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+                    HorizontalDivider(color = BorderSubtle)
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Memory, contentDescription = null, tint = TextSecondary)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Aceleração por Hardware", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Text("Renderização rápida via GPU", color = TextTertiary, fontSize = 11.sp)
-                            }
-                        }
+                        Text(
+                            text = "Salvar automaticamente",
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                         Switch(
-                            checked = hardwareAcc,
-                            onCheckedChange = { hardwareAcc = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = PrimaryPurple, checkedTrackColor = PrimaryPurpleSoft)
+                            checked = autoSave,
+                            onCheckedChange = { autoSave = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = SuccessGreen,
+                                uncheckedThumbColor = TextTertiary,
+                                uncheckedTrackColor = SurfaceElevated
+                            )
                         )
                     }
-
-                    Divider(color = BorderSubtle, modifier = Modifier.padding(vertical = 10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CleaningServices, contentDescription = null, tint = TextSecondary)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Limpar Cache Temporário", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Text(if (cacheCleaned) "Cache limpo: 0 MB" else "Tamanho em disco: 138 MB", color = TextTertiary, fontSize = 11.sp)
-                            }
-                        }
-                        TextButton(
-                            onClick = {
-                                cacheCleaned = true
-                                viewModel.setFeedback("Cache limpo com sucesso!")
-                            },
-                            modifier = Modifier.testTag("clear_cache_button")
-                        ) {
-                            Text("Limpar", color = PrimaryPurpleVariant, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    HorizontalDivider(color = BorderSubtle)
+                    SettingItemRow(
+                        title = "Pasta de projetos",
+                        value = "/BotiVideoEditor"
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // About
-            Text("Sobre o Aplicativo", color = PrimaryPurpleVariant, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            // Seção Premium
+            Text(
+                text = "Premium",
+                color = TextSecondary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp
+            )
             Spacer(modifier = Modifier.height(8.dp))
-            Card(
+            Surface(
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceElevated)
+                color = SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    SettingRow(
-                        icon = Icons.Default.Info,
-                        title = "Versão",
-                        value = "1.0.0 (Build 2026)"
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.WorkspacePremium,
+                            contentDescription = null,
+                            tint = GoldPremium,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Comprar Premium",
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                        contentDescription = null,
+                        tint = TextTertiary,
+                        modifier = Modifier.size(14.dp)
                     )
-                    Divider(color = BorderSubtle, modifier = Modifier.padding(vertical = 10.dp))
-                    SettingRow(
-                        icon = Icons.Default.Shield,
-                        title = "Política de Privacidade",
-                        value = "Ler termos"
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Seção Sobre
+            Text(
+                text = "Sobre",
+                color = TextSecondary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                    SettingItemRow(
+                        title = "Avaliar o app",
+                        value = ""
                     )
-                    Divider(color = BorderSubtle, modifier = Modifier.padding(vertical = 10.dp))
-                    SettingRow(
-                        icon = Icons.Default.Headphones,
-                        title = "Suporte & Contato",
-                        value = "support@boti.dev"
+                    HorizontalDivider(color = BorderSubtle)
+                    SettingItemRow(
+                        title = "Política de privacidade",
+                        value = ""
                     )
                 }
             }
@@ -178,21 +204,40 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SettingRow(
-    icon: ImageVector,
+private fun SettingItemRow(
     title: String,
-    value: String
+    value: String,
+    onClick: () -> Unit = {}
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        Text(
+            text = title,
+            color = TextPrimary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(imageVector = icon, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Text(text = title, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            if (value.isNotBlank()) {
+                Text(
+                    text = value,
+                    color = TextSecondary,
+                    fontSize = 14.sp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                contentDescription = null,
+                tint = TextTertiary,
+                modifier = Modifier.size(13.dp)
+            )
         }
-        Text(text = value, color = TextTertiary, fontSize = 13.sp)
     }
 }

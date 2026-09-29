@@ -10,26 +10,26 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 import com.example.model.ExportOptions
-import com.example.ui.components.GradientPrimary
-import com.example.ui.components.PrimaryGradientButton
 import com.example.ui.theme.*
 import com.example.viewmodel.EditorViewModel
 
+/**
+ * Tela 12: EXPORTAR - Refinada conforme layout app.png
+ */
 @Composable
 fun ExportScreen(
     viewModel: EditorViewModel,
@@ -39,11 +39,15 @@ fun ExportScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val project = uiState.currentProject
+    val context = LocalContext.current
 
-    var selectedResolution by remember { mutableStateOf("1080p") }
-    var selectedFps by remember { mutableStateOf(30) }
+    var selectedResolution by remember { mutableStateOf("1080P") }
+    var selectedFps by remember { mutableIntStateOf(30) }
     var selectedQuality by remember { mutableStateOf("Alta") }
-    var removeWatermark by remember { mutableStateOf(uiState.isPremiumUser) }
+
+    val resolutions = listOf("720P", "1080P", "2K", "4K")
+    val frameRates = listOf(24, 30, 60)
+    val qualities = listOf("Baixa", "Média", "Alta")
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -64,11 +68,82 @@ fun ExportScreen(
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Exportar Vídeo",
-                    fontSize = 18.sp,
+                    text = "Exportar",
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
+            }
+        },
+        bottomBar = {
+            Surface(
+                color = SurfaceDark,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Botão Principal: Exportar (Tela 12 de layout app.png)
+                    Button(
+                        onClick = {
+                            val options = ExportOptions(
+                                resolution = selectedResolution.lowercase(),
+                                frameRate = selectedFps,
+                                quality = selectedQuality,
+                                removeWatermark = uiState.isPremiumUser
+                            )
+                            viewModel.startExport(options)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(54.dp)
+                            .testTag("export_button")
+                            .testTag("confirm_export_button"),
+                        shape = RoundedCornerShape(27.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple)
+                    ) {
+                        Text(
+                            text = "Exportar",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Botão Secundário: Salvar na galeria
+                    Surface(
+                        shape = RoundedCornerShape(27.dp),
+                        color = Color.Transparent,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderStrong),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .clickable {
+                                val options = ExportOptions(
+                                    resolution = selectedResolution.lowercase(),
+                                    frameRate = selectedFps,
+                                    quality = selectedQuality,
+                                    removeWatermark = uiState.isPremiumUser
+                                )
+                                viewModel.startExport(options)
+                            }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = "Salvar na galeria",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary
+                            )
+                        }
+                    }
+                }
             }
         }
     ) { innerPadding ->
@@ -77,75 +152,34 @@ fun ExportScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
-            // Project Preview Card
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = SurfaceElevated,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(72.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                    ) {
-                        AsyncImage(
-                            model = project?.thumbUrl,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column {
-                        Text(
-                            text = project?.title ?: "Projeto",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Duração: ${project?.duration ?: "00:15"} • ${project?.aspectRatio?.label}",
-                            color = TextTertiary,
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Tamanho estimado: ~${if (selectedResolution == "4K") "185" else if (selectedResolution == "1080p") "54" else "26"} MB",
-                            color = PrimaryPurpleVariant,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Resolution Options
-            Text("Resolução", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            Spacer(modifier = Modifier.height(8.dp))
+            // Seção Resolução
+            Text(
+                text = "Resolução",
+                color = TextSecondary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(10.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceDark)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                listOf("720p", "1080p", "4K").forEach { res ->
-                    val isSel = selectedResolution == res
-                    val is4k = res == "4K"
+                resolutions.forEach { res ->
+                    val isSelected = selectedResolution == res
+                    val is4K = res == "4K"
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSel) PrimaryPurpleSoft else SurfaceElevated,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurple else BorderStrong),
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) PrimaryPurple else Color.Transparent,
                         modifier = Modifier
                             .weight(1f)
                             .clickable {
-                                if (is4k && !uiState.isPremiumUser) {
+                                if (is4K && !uiState.isPremiumUser) {
                                     onNavigateToPremium()
                                 } else {
                                     selectedResolution = res
@@ -153,151 +187,129 @@ fun ExportScreen(
                             }
                             .testTag("res_$res")
                     ) {
-                        Column(
-                            modifier = Modifier.padding(vertical = 12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 10.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = res,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = if (isSel) PrimaryPurpleVariant else TextPrimary
-                                )
-                                if (is4k) {
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Icon(
-                                        imageVector = Icons.Default.Diamond,
-                                        contentDescription = null,
-                                        tint = GoldPremium,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                }
-                            }
                             Text(
-                                text = if (res == "4K") "Ultra HD" else if (res == "1080p") "Full HD" else "HD",
-                                fontSize = 10.sp,
-                                color = TextTertiary
+                                text = res,
+                                fontSize = 14.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else TextSecondary
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // Frame Rate (FPS)
-            Text("Taxa de Quadros (FPS)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            Spacer(modifier = Modifier.height(8.dp))
+            // Seção Taxa de quadros (FPS)
+            Text(
+                text = "Taxa de quadros",
+                color = TextSecondary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(10.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceDark)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                listOf(24, 30, 60).forEach { fps ->
-                    val isSel = selectedFps == fps
+                frameRates.forEach { fps ->
+                    val isSelected = selectedFps == fps
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSel) PrimaryPurpleSoft else SurfaceElevated,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurple else BorderStrong),
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) PrimaryPurple else Color.Transparent,
                         modifier = Modifier
                             .weight(1f)
                             .clickable { selectedFps = fps }
                     ) {
-                        Column(
-                            modifier = Modifier.padding(vertical = 12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 10.dp)
                         ) {
                             Text(
-                                text = "$fps FPS",
-                                fontWeight = FontWeight.Bold,
+                                text = fps.toString(),
                                 fontSize = 14.sp,
-                                color = if (isSel) PrimaryPurpleVariant else TextPrimary
-                            )
-                            Text(
-                                text = if (fps == 60) "Super Fluido" else if (fps == 30) "Padrão" else "Cinema",
-                                fontSize = 10.sp,
-                                color = TextTertiary
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else TextSecondary
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // Remove Watermark Toggle
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = SurfaceElevated,
-                modifier = Modifier.fillMaxWidth()
+            // Seção Qualidade
+            Text(
+                text = "Qualidade",
+                color = TextSecondary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceDark)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Remover Marca d'Água", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                            if (!uiState.isPremiumUser) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Surface(shape = RoundedCornerShape(6.dp), color = GoldPremium) {
-                                    Text("PRO", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
-                                }
-                            }
+                qualities.forEach { q ->
+                    val isSelected = selectedQuality == q
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) PrimaryPurple else Color.Transparent,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { selectedQuality = q }
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = q,
+                                fontSize = 14.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else TextSecondary
+                            )
                         }
-                        Text("Exportação limpa sem o selo Boti", color = TextTertiary, fontSize = 11.sp)
                     }
-
-                    Switch(
-                        checked = removeWatermark,
-                        onCheckedChange = {
-                            if (!uiState.isPremiumUser) {
-                                onNavigateToPremium()
-                            } else {
-                                removeWatermark = it
-                            }
-                        },
-                        colors = SwitchDefaults.colors(checkedThumbColor = PrimaryPurple, checkedTrackColor = PrimaryPurpleSoft)
-                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(36.dp))
 
-            // Export CTA Button
-            PrimaryGradientButton(
-                text = "Iniciar Exportação",
-                onClick = {
-                    viewModel.startExport(
-                        ExportOptions(
-                            resolution = selectedResolution,
-                            frameRate = selectedFps,
-                            quality = selectedQuality,
-                            removeWatermark = removeWatermark
-                        )
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                icon = Icons.Default.FileUpload,
-                testTag = "start_export_button"
+            // Tamanho estimado
+            val estimatedMb = if (selectedResolution == "4K") "185.0" else if (selectedResolution == "2K") "64.0" else if (selectedResolution == "1080P") "24.5" else "12.0"
+            Text(
+                text = "Tamanho estimado: $estimatedMb MB",
+                color = TextSecondary,
+                fontSize = 14.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }
 
-    // Exporting Progress Dialog
+    // Diálogo de Progresso de Exportação
     if (uiState.isExporting) {
         AlertDialog(
             onDismissRequest = {},
             containerColor = SurfaceDark,
             title = {
-                Text("Exportando Vídeo", color = TextPrimary, fontWeight = FontWeight.Bold)
+                Text("Exportando Vídeo...", color = TextPrimary, fontWeight = FontWeight.Bold)
             },
             text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     LinearProgressIndicator(
                         progress = { uiState.exportProgress },
                         modifier = Modifier
@@ -316,11 +328,10 @@ fun ExportScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (uiState.exportProgress < 0.4f) "Renderizando quadros de vídeo..."
-                        else if (uiState.exportProgress < 0.8f) "Codificando áudio e efeitos..."
-                        else "Finalizando arquivo MP4...",
+                        text = uiState.exportStatusMessage ?: "Processando codificação MP4...",
                         color = TextSecondary,
-                        fontSize = 12.sp
+                        fontSize = 12.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             },
@@ -333,7 +344,7 @@ fun ExportScreen(
         )
     }
 
-    // Export Success Dialog
+    // Diálogo de Sucesso
     if (uiState.exportSuccess) {
         AlertDialog(
             onDismissRequest = { viewModel.resetExportState() },
@@ -360,7 +371,7 @@ fun ExportScreen(
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "Seu vídeo foi salvo em alta qualidade:",
+                        text = "Vídeo salvo na pasta BotiVideoEditor e na galeria:",
                         color = TextSecondary,
                         fontSize = 13.sp
                     )
@@ -371,6 +382,38 @@ fun ExportScreen(
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                uiState.lastExportedFilePath?.let { path ->
+                                    viewModel.openVideoInExternalPlayer(context, path)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Abrir", fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                uiState.lastExportedFilePath?.let { path ->
+                                    viewModel.shareVideo(context, path)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Enviar", fontSize = 12.sp)
+                        }
+                    }
                 }
             },
             confirmButton = {
