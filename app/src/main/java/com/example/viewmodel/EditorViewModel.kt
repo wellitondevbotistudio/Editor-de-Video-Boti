@@ -33,7 +33,8 @@ enum class ToolPanel {
     TRANSITION,
     CANVAS,
     LAYERS,
-    TRANSFORM
+    TRANSFORM,
+    FILES
 }
 
 data class EditorUiState(

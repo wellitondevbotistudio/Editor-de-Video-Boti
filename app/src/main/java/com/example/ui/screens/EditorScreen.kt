@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +44,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import android.view.ViewGroup
 import coil.compose.AsyncImage
+import java.io.File
 import com.example.data.MockData
 import com.example.effect.*
 import com.example.model.*
@@ -49,12 +52,14 @@ import com.example.overlay.StickerLayer
 import com.example.overlay.StickerPresetsRepository
 import com.example.overlay.TextOverlayLayer
 import com.example.overlay.parseColorSafely
+import com.example.player.PlaybackState
 import com.example.template.TextTemplate
 import com.example.template.TextTemplateRepository
 import com.example.transition.TransitionAwareMediaSurface
 import com.example.transition.TransitionType
 import com.example.ui.components.*
 import com.example.ui.theme.*
+import com.example.viewmodel.EditorUiState
 import com.example.viewmodel.EditorViewModel
 import com.example.viewmodel.ToolPanel
 
@@ -87,6 +92,24 @@ fun EditorScreen(
 
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableFloatStateOf(0f) }
+    var isFullscreen by rememberSaveable { mutableStateOf(false) }
+
+    val photoVideoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.importMediaUris(uris)
+        }
+    }
+
+    // Hardware/gesture back handling
+    BackHandler(enabled = isFullscreen) {
+        isFullscreen = false
+    }
+
+    BackHandler(enabled = !isFullscreen && uiState.activePanel != ToolPanel.NONE) {
+        viewModel.setActivePanel(ToolPanel.NONE)
+    }
 
     if (project == null) {
         Box(
@@ -116,7 +139,8 @@ fun EditorScreen(
     Scaffold(
         containerColor = BackgroundDark,
         topBar = {
-            Row(
+            if (!isFullscreen) {
+                Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
@@ -231,514 +255,1019 @@ fun EditorScreen(
                             }
                         }
                     }
+                    }
                 }
             }
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // Video Canvas / Preview
+        if (isFullscreen) {
+            // MODO TELA CHEIA: Ocupa 100% da tela disponível, controles essenciais em overlay
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
+                    .fillMaxSize()
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
-                // Video Frame with Aspect Ratio
-                val frameRatio = project.aspectRatio.ratio
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight(0.92f)
-                        .aspectRatio(frameRatio)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF111111)),
+                // Vídeo em tela cheia mantendo aspect ratio sem cortes nem distorções
+                BoxWithConstraints(
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    // Real Media3 Player / Photo Display with Real Effects & Transformations
-                    if (project.clips.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "Nenhum clipe na Timeline",
-                                color = TextSecondary,
-                                fontSize = 13.sp
-                            )
-                        }
+                    val frameRatio = project.aspectRatio.ratio
+                    val containerRatio = maxWidth / maxHeight
+                    val videoModifier = if (containerRatio > frameRatio) {
+                        Modifier
+                            .fillMaxHeight()
+                            .aspectRatio(frameRatio)
                     } else {
-                        TransitionAwareMediaSurface(
-                            clips = project.clips,
-                            activeVFX = project.activeVFX,
-                            currentPlayheadMs = uiState.currentPositionMs,
-                            activeClip = currentClip,
-                            isPhotoActive = playbackState.isPhotoActive,
-                            activePhotoPath = playbackState.activePhotoPath,
-                            exoPlayer = viewModel.playerManager.exoPlayer,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(frameRatio)
                     }
 
-                    // Buffering Indicator
-                    if (playbackState.isBuffering) {
-                        CircularProgressIndicator(
-                            color = PrimaryPurpleVariant,
-                            modifier = Modifier.size(36.dp).align(Alignment.Center)
-                        )
-                    }
-
-                    // Error Message overlay if missing media or decode failure
-                    if (playbackState.errorMessage != null) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = DangerRed.copy(alpha = 0.85f),
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(8.dp)
-                        ) {
-                            Text(
-                                text = playbackState.errorMessage ?: "",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    // Real Stickers and Animated GIFs Layer
-                    StickerLayer(
-                        stickers = project.stickers,
-                        currentPlayheadMs = uiState.currentPositionMs,
-                        selectedStickerId = uiState.selectedStickerId,
-                        onSelectSticker = {
-                            viewModel.selectSticker(it)
-                            if (it != null) viewModel.setActivePanel(ToolPanel.STICKER)
-                        },
-                        onMoveSticker = { id, newX, newY -> viewModel.updateStickerPosition(id, newX, newY) },
-                        onDeleteSticker = { viewModel.removeSticker(it) },
-                        modifier = Modifier.fillMaxSize()
-                    )
-
-                    // Real Dynamic & Animated Text Overlays Layer
-                    TextOverlayLayer(
-                        texts = project.texts,
-                        currentPlayheadMs = uiState.currentPositionMs,
-                        selectedTextId = uiState.selectedTextId,
-                        onSelectText = {
-                            viewModel.selectTextOverlay(it)
-                            if (it != null) viewModel.setActivePanel(ToolPanel.TEXT)
-                        },
-                        onMoveText = { id, newX, newY -> viewModel.updateTextOverlayPosition(id, newX, newY) },
-                        onDeleteText = { viewModel.removeTextOverlay(it) },
-                        modifier = Modifier.fillMaxSize()
-                    )
-
-                    // Subtitles overlay
-                    val activeSubtitle = project.subtitles.find {
-                        uiState.currentPositionMs in it.startTimeMs..it.endTimeMs && it.isEnabled
-                    }
-                    if (activeSubtitle != null) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 24.dp)
-                                .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = activeSubtitle.text,
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-
-                    // Watermark indicator (if not premium)
-                    if (!uiState.isPremiumUser) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = Color.Black.copy(alpha = 0.6f),
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(8.dp)
-                        ) {
-                            Text(
-                                text = "Boti Editor",
-                                color = Color.White.copy(alpha = 0.7f),
-                                fontSize = 10.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-
-                    // Play / Pause Overlay Button
-                    IconButton(
-                        onClick = { viewModel.togglePlayback() },
-                        modifier = Modifier
-                            .size(54.dp)
-                            .background(Color.Black.copy(alpha = 0.45f), CircleShape)
-                            .align(Alignment.Center)
-                            .testTag("play_pause_button")
-                    ) {
-                        Icon(
-                            imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
-                            tint = Color.White,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                }
-            }
-
-            // Player Controls Bar (Tela 5 de layout app.png)
-            val displayPosition = if (isScrubbing) scrubPositionMs.toLong() else uiState.currentPositionMs
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(BackgroundDark)
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                // Indicador de Tempo em capsule moderna
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = SurfaceDark,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
-                ) {
-                    Text(
-                        text = "${formatTime(displayPosition)} / ${formatTime(totalDurationMs)}",
-                        color = TextSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    VideoPreviewContent(
+                        project = project,
+                        uiState = uiState,
+                        playbackState = playbackState,
+                        currentClip = currentClip,
+                        viewModel = viewModel,
+                        modifier = videoModifier.background(Color.Black)
                     )
                 }
 
-                // Play / Pause Central Hero Button
-                Surface(
-                    onClick = { viewModel.togglePlayback() },
-                    shape = CircleShape,
-                    color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        if (uiState.isPlaying) BorderSubtle else PrimaryPurpleLight
-                    ),
-                    modifier = Modifier
-                        .size(42.dp)
-                        .shadow(if (uiState.isPlaying) 0.dp else 10.dp, CircleShape, spotColor = PrimaryPurple)
-                        .testTag("btn_play_pause")
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-
-                // Ações da Direita: Dividir Rápido, Desfazer, Refazer, Tela Cheia
+                // Barra superior flutuante na tela cheia: Sair da Tela Cheia & Título
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(
-                        onClick = { viewModel.splitClipAtPlayhead() },
-                        enabled = currentClip != null,
-                        modifier = Modifier.size(32.dp)
+                    Surface(
+                        onClick = { isFullscreen = false },
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color.Black.copy(alpha = 0.65f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                        modifier = Modifier.testTag("exit_fullscreen_button")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.CallSplit,
-                            contentDescription = "Dividir",
-                            tint = if (currentClip != null) PrimaryPurpleLight else TextTertiary.copy(alpha = 0.35f),
-                            modifier = Modifier.size(17.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FullscreenExit,
+                                contentDescription = "Sair da Tela Cheia",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Sair da Tela Cheia",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
 
-                    IconButton(
-                        onClick = { viewModel.undo() },
-                        enabled = uiState.canUndo,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .testTag("editor_undo_button")
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.Black.copy(alpha = 0.65f),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Undo,
-                            contentDescription = "Desfazer",
-                            tint = if (uiState.canUndo) Color.White else TextTertiary.copy(alpha = 0.35f),
-                            modifier = Modifier.size(18.dp)
+                        Text(
+                            text = project.title,
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
+                }
 
-                    IconButton(
-                        onClick = { viewModel.redo() },
-                        enabled = uiState.canRedo,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .testTag("editor_redo_button")
+                // Barra inferior flutuante na tela cheia: Play/Pause, Scrubber e Tempo
+                val displayPosition = if (isScrubbing) scrubPositionMs.toLong() else uiState.currentPositionMs
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = Color.Black.copy(alpha = 0.75f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 20.dp, vertical = 16.dp)
+                        .fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Redo,
-                            contentDescription = "Refazer",
-                            tint = if (uiState.canRedo) Color.White else TextTertiary.copy(alpha = 0.35f),
-                            modifier = Modifier.size(18.dp)
+                        IconButton(
+                            onClick = { viewModel.togglePlayback() },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Slider(
+                            value = displayPosition.toFloat(),
+                            onValueChange = {
+                                isScrubbing = true
+                                scrubPositionMs = it
+                            },
+                            onValueChangeFinished = {
+                                viewModel.seekTo(scrubPositionMs.toLong())
+                                isScrubbing = false
+                            },
+                            valueRange = 0f..maxOf(1L, totalDurationMs).toFloat(),
+                            modifier = Modifier.weight(1f),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = PrimaryPurple,
+                                inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                            )
                         )
-                    }
 
-                    IconButton(
-                        onClick = { viewModel.setFeedback("Modo de visualização expandida") },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Fullscreen,
-                            contentDescription = "Tela Cheia",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Text(
+                            text = "${formatTime(displayPosition)} / ${formatTime(totalDurationMs)}",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
             }
-
-            // CapCut Pro Multi-Layer Timeline
-            CapCutMultiTrackTimeline(
-                project = project,
-                currentPositionMs = uiState.currentPositionMs,
-                totalDurationMs = totalDurationMs,
-                isPlaying = uiState.isPlaying,
-                selectedClipId = uiState.selectedClipId,
-                selectedAudioId = uiState.selectedAudioTrackId,
-                selectedTextId = uiState.selectedTextId,
-                selectedStickerId = uiState.selectedStickerId,
-                waveforms = uiState.waveforms,
-                canUndo = uiState.canUndo,
-                canRedo = uiState.canRedo,
-                onSeek = { viewModel.seekTo(it) },
-                onSelectClip = { clipId ->
-                    viewModel.selectClip(clipId, seekToClipStart = false)
-                    viewModel.setActivePanel(ToolPanel.EDIT_TOOLS)
-                },
-                onSelectAudio = { audioId ->
-                    viewModel.selectAudioTrack(audioId)
-                    viewModel.setActivePanel(ToolPanel.AUDIO)
-                },
-                onSelectText = { textId ->
-                    viewModel.selectTextOverlay(textId)
-                    viewModel.setActivePanel(ToolPanel.TEXT)
-                },
-                onSelectSticker = { stickerId ->
-                    viewModel.selectSticker(stickerId)
-                    viewModel.setActivePanel(ToolPanel.STICKER)
-                },
-                onSplitClip = { viewModel.splitClipAtPlayhead() },
-                onDeleteSelected = {
-                    if (uiState.selectedClipId != null) {
-                        viewModel.deleteSelectedClip()
-                    } else if (uiState.selectedAudioTrackId != null) {
-                        viewModel.removeAudioTrack(uiState.selectedAudioTrackId!!)
-                    } else if (uiState.selectedTextId != null) {
-                        viewModel.removeTextOverlay(uiState.selectedTextId!!)
-                    } else if (uiState.selectedStickerId != null) {
-                        viewModel.removeSticker(uiState.selectedStickerId!!)
-                    }
-                },
-                onUndo = { viewModel.undo() },
-                onRedo = { viewModel.redo() },
-                onAddMedia = onNavigateToImport,
-                onAddAudio = { viewModel.setActivePanel(ToolPanel.AUDIO) },
-                onAddText = { viewModel.setActivePanel(ToolPanel.TEXT) },
-                onAddEffect = { viewModel.setActivePanel(ToolPanel.VFX) },
-                onOpenTransition = { fromId, _ ->
-                    viewModel.selectClip(fromId)
-                    viewModel.setActivePanel(ToolPanel.TRANSITION)
-                },
-                onMoveClipLeft = { uiState.selectedClipId?.let { viewModel.moveClipLeft(it) } },
-                onMoveClipRight = { uiState.selectedClipId?.let { viewModel.moveClipRight(it) } },
-                onDuplicateSelected = { viewModel.duplicateClip() },
-                onMoveText = { textId, newStart ->
-                    val txt = project.texts.find { it.id == textId }
-                    if (txt != null) {
-                        viewModel.updateTextOverlayTiming(textId, newStart, txt.durationMs)
-                    }
-                },
-                onMoveSticker = { stkId, newStart ->
-                    val stk = project.stickers.find { it.id == stkId }
-                    if (stk != null) {
-                        viewModel.updateStickerTiming(stkId, newStart, stk.durationMs)
-                    }
-                },
-                onMoveAudio = { audioId, newStart ->
-                    viewModel.updateAudioTrackPosition(audioId, newStart)
-                },
-                onAddOverlay = { viewModel.setActivePanel(ToolPanel.STICKER) }
-            )
-
-            // Main Bottom Dock (Tela 5 de layout app.png)
-            if (uiState.activePanel == ToolPanel.NONE && uiState.selectedClipId == null) {
-                Surface(
-                    color = SurfaceDark,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
-                    modifier = Modifier.fillMaxWidth()
+        } else {
+            // MODO DE EDIÇÃO: 55% Prévia do Vídeo + 45% Controles e Ferramentas
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                // 1. ÁREA DE PRÉVIA: Ocupa aproximadamente 55% da área disponível
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.55f)
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
                 ) {
+                    // Frame de vídeo com restrição de aspect ratio responsiva (UIAspectRatioConstraint)
+                    BoxWithConstraints(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val frameRatio = project.aspectRatio.ratio
+                        val containerRatio = maxWidth / maxHeight
+                        val videoModifier = if (containerRatio > frameRatio) {
+                            Modifier
+                                .fillMaxHeight(0.96f)
+                                .aspectRatio(frameRatio)
+                        } else {
+                            Modifier
+                                .fillMaxWidth(0.96f)
+                                .aspectRatio(frameRatio)
+                        }
+
+                        VideoPreviewContent(
+                            project = project,
+                            uiState = uiState,
+                            playbackState = playbackState,
+                            currentClip = currentClip,
+                            viewModel = viewModel,
+                            modifier = videoModifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF111111))
+                        )
+                    }
+                }
+
+                // 2. ÁREA DE CONTROLES E FERRAMENTAS: Ocupa o restante (~45% da área)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.45f)
+                        .background(BackgroundDark)
+                ) {
+                    // Barra de Controles de Reprodução
+                    val displayPosition = if (isScrubbing) scrubPositionMs.toLong() else uiState.currentPositionMs
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .background(BackgroundDark)
+                            .padding(horizontal = 14.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        ToolButton(icon = Icons.Default.ContentCut, label = "Editar", onClick = { viewModel.setActivePanel(ToolPanel.EDIT_TOOLS) })
-                        ToolButton(icon = Icons.Default.MusicNote, label = "Áudio", onClick = { viewModel.setActivePanel(ToolPanel.AUDIO) })
-                        ToolButton(icon = Icons.Default.TextFields, label = "Texto", onClick = { viewModel.setActivePanel(ToolPanel.TEXT) })
-                        ToolButton(icon = Icons.Default.Layers, label = "Sobrepor", onClick = { viewModel.setActivePanel(ToolPanel.STICKER) })
-                        ToolButton(icon = Icons.Default.AutoAwesome, label = "Efeitos", onClick = { viewModel.setActivePanel(ToolPanel.VFX) })
-                        ToolButton(icon = Icons.Default.Shuffle, label = "Transição", onClick = { viewModel.setActivePanel(ToolPanel.TRANSITION) })
-                        ToolButton(icon = Icons.Default.FilterFrames, label = "Filtros", onClick = { viewModel.setActivePanel(ToolPanel.FILTER) })
-                        ToolButton(icon = Icons.Default.Tune, label = "Ajustes", onClick = { viewModel.setActivePanel(ToolPanel.ADJUST) })
-                        ToolButton(icon = Icons.Default.AspectRatio, label = "Formato", onClick = { viewModel.setActivePanel(ToolPanel.CANVAS) })
-                    }
-                }
-            }
-
-            // Sub-painel: Tela 6 (FERRAMENTAS - EDITAR) ou ferramentas específicas
-            val showEditTools = uiState.activePanel == ToolPanel.EDIT_TOOLS || (uiState.selectedClipId != null && uiState.activePanel == ToolPanel.NONE)
-
-            if (showEditTools) {
-                Surface(
-                    color = SurfaceElevated,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        // Header: '<' Voltar | "Editar" | 'v' Confirmar (Tela 6 da referência)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                        // Indicador de Tempo
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = SurfaceDark,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
                         ) {
-                            IconButton(
-                                onClick = {
-                                    viewModel.setActivePanel(ToolPanel.NONE)
-                                    viewModel.selectClip(null)
-                                },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = Color.White, modifier = Modifier.size(20.dp))
-                            }
                             Text(
-                                text = "Editar",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary
+                                text = "${formatTime(displayPosition)} / ${formatTime(totalDurationMs)}",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
-                            IconButton(
-                                onClick = {
-                                    viewModel.setActivePanel(ToolPanel.NONE)
-                                    viewModel.selectClip(null)
-                                },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(Icons.Default.Check, contentDescription = "Confirmar", tint = Color.White, modifier = Modifier.size(20.dp))
+                        }
+
+                        // Botão Play / Pause Central
+                        Surface(
+                            onClick = { viewModel.togglePlayback() },
+                            shape = CircleShape,
+                            color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (uiState.isPlaying) BorderSubtle else PrimaryPurpleLight
+                            ),
+                            modifier = Modifier
+                                .size(38.dp)
+                                .shadow(if (uiState.isPlaying) 0.dp else 8.dp, CircleShape, spotColor = PrimaryPurple)
+                                .testTag("btn_play_pause")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Grid 3 colunas x 4 linhas de Ferramentas de Edição (Tela 6)
-                        val editTools = listOf(
-                            Triple("Cortar", Icons.Default.ContentCut) { viewModel.setActivePanel(ToolPanel.TRIM) },
-                            Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitClipAtPlayhead() },
-                            Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedClip(); viewModel.setActivePanel(ToolPanel.NONE) },
-                            Triple("Velocidade", Icons.Default.Speed) { viewModel.setActivePanel(ToolPanel.SPEED) },
-                            Triple("Volume", Icons.Default.VolumeUp) { viewModel.setActivePanel(ToolPanel.AUDIO) },
-                            Triple("Ajustes", Icons.Default.Tune) { viewModel.setActivePanel(ToolPanel.ADJUST) },
-                            Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateClip() },
-                            Triple("Inverter", Icons.Default.Refresh) { viewModel.setFeedback("Efeito reverso aplicado ao clipe.") },
-                            Triple("Congelar", Icons.Default.AcUnit) { viewModel.setFeedback("Quadro congelado criado na linha do tempo.") },
-                            Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CANVAS) },
-                            Triple("Substituir", Icons.Default.SwapHoriz) { onNavigateToImport() },
-                            Triple("Opacidade", Icons.Default.Opacity) { viewModel.setActivePanel(ToolPanel.TRANSFORM) }
-                        )
-
+                        // Ações da Direita: Dividir, Desfazer, Refazer, Tela Cheia
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            editTools.forEach { (label, icon, action) ->
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = SurfaceDark,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
-                                    modifier = Modifier
-                                        .size(width = 80.dp, height = 70.dp)
-                                        .clickable(onClick = action)
-                                        .testTag("edit_tool_$label")
+                            IconButton(
+                                onClick = { viewModel.splitClipAtPlayhead() },
+                                enabled = currentClip != null,
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CallSplit,
+                                    contentDescription = "Dividir",
+                                    tint = if (currentClip != null) PrimaryPurpleLight else TextTertiary.copy(alpha = 0.35f),
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { viewModel.undo() },
+                                enabled = uiState.canUndo,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("editor_undo_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Undo,
+                                    contentDescription = "Desfazer",
+                                    tint = if (uiState.canUndo) Color.White else TextTertiary.copy(alpha = 0.35f),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { viewModel.redo() },
+                                enabled = uiState.canRedo,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("editor_redo_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Redo,
+                                    contentDescription = "Refazer",
+                                    tint = if (uiState.canRedo) Color.White else TextTertiary.copy(alpha = 0.35f),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { isFullscreen = true },
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("fullscreen_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Fullscreen,
+                                    contentDescription = "Tela Cheia",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Linha do tempo multi-camadas CapCut adaptável
+                    CapCutMultiTrackTimeline(
+                        project = project,
+                        currentPositionMs = uiState.currentPositionMs,
+                        totalDurationMs = totalDurationMs,
+                        isPlaying = uiState.isPlaying,
+                        selectedClipId = uiState.selectedClipId,
+                        selectedAudioId = uiState.selectedAudioTrackId,
+                        selectedTextId = uiState.selectedTextId,
+                        selectedStickerId = uiState.selectedStickerId,
+                        waveforms = uiState.waveforms,
+                        canUndo = uiState.canUndo,
+                        canRedo = uiState.canRedo,
+                        onSeek = { viewModel.seekTo(it) },
+                        onSelectClip = { clipId ->
+                            viewModel.selectClip(clipId, seekToClipStart = false)
+                            viewModel.setActivePanel(ToolPanel.EDIT_TOOLS)
+                        },
+                        onSelectAudio = { audioId ->
+                            viewModel.selectAudioTrack(audioId)
+                            viewModel.setActivePanel(ToolPanel.AUDIO)
+                        },
+                        onSelectText = { textId ->
+                            viewModel.selectTextOverlay(textId)
+                            viewModel.setActivePanel(ToolPanel.TEXT)
+                        },
+                        onSelectSticker = { stickerId ->
+                            viewModel.selectSticker(stickerId)
+                            viewModel.setActivePanel(ToolPanel.STICKER)
+                        },
+                        onSplitClip = { viewModel.splitClipAtPlayhead() },
+                        onDeleteSelected = {
+                            if (uiState.selectedClipId != null) {
+                                viewModel.deleteSelectedClip()
+                            } else if (uiState.selectedAudioTrackId != null) {
+                                viewModel.removeAudioTrack(uiState.selectedAudioTrackId!!)
+                            } else if (uiState.selectedTextId != null) {
+                                viewModel.removeTextOverlay(uiState.selectedTextId!!)
+                            } else if (uiState.selectedStickerId != null) {
+                                viewModel.removeSticker(uiState.selectedStickerId!!)
+                            }
+                        },
+                        onUndo = { viewModel.undo() },
+                        onRedo = { viewModel.redo() },
+                        onAddMedia = onNavigateToImport,
+                        onAddAudio = { viewModel.setActivePanel(ToolPanel.AUDIO) },
+                        onAddText = { viewModel.setActivePanel(ToolPanel.TEXT) },
+                        onAddEffect = { viewModel.setActivePanel(ToolPanel.VFX) },
+                        onOpenTransition = { fromId, _ ->
+                            viewModel.selectClip(fromId)
+                            viewModel.setActivePanel(ToolPanel.TRANSITION)
+                        },
+                        onMoveClipLeft = { uiState.selectedClipId?.let { viewModel.moveClipLeft(it) } },
+                        onMoveClipRight = { uiState.selectedClipId?.let { viewModel.moveClipRight(it) } },
+                        onDuplicateSelected = { viewModel.duplicateClip() },
+                        onMoveText = { textId, newStart ->
+                            val txt = project.texts.find { it.id == textId }
+                            if (txt != null) {
+                                viewModel.updateTextOverlayTiming(textId, newStart, txt.durationMs)
+                            }
+                        },
+                        onMoveSticker = { stkId, newStart ->
+                            val stk = project.stickers.find { it.id == stkId }
+                            if (stk != null) {
+                                viewModel.updateStickerTiming(stkId, newStart, stk.durationMs)
+                            }
+                        },
+                        onMoveAudio = { audioId, newStart ->
+                            viewModel.updateAudioTrackPosition(audioId, newStart)
+                        },
+                        onAddOverlay = { viewModel.setActivePanel(ToolPanel.STICKER) },
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    // Dock de Ferramentas Principal (com aba Arquivos dedicada)
+                    if (uiState.activePanel == ToolPanel.NONE && uiState.selectedClipId == null) {
+                        Surface(
+                            color = SurfaceDark,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .navigationBarsPadding()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                ToolButton(icon = Icons.Default.FolderOpen, label = "Arquivos", onClick = { viewModel.setActivePanel(ToolPanel.FILES) })
+                                ToolButton(icon = Icons.Default.ContentCut, label = "Editar", onClick = { viewModel.setActivePanel(ToolPanel.EDIT_TOOLS) })
+                                ToolButton(icon = Icons.Default.MusicNote, label = "Áudio", onClick = { viewModel.setActivePanel(ToolPanel.AUDIO) })
+                                ToolButton(icon = Icons.Default.TextFields, label = "Texto", onClick = { viewModel.setActivePanel(ToolPanel.TEXT) })
+                                ToolButton(icon = Icons.Default.Layers, label = "Sobrepor", onClick = { viewModel.setActivePanel(ToolPanel.STICKER) })
+                                ToolButton(icon = Icons.Default.AutoAwesome, label = "Efeitos", onClick = { viewModel.setActivePanel(ToolPanel.VFX) })
+                                ToolButton(icon = Icons.Default.Shuffle, label = "Transição", onClick = { viewModel.setActivePanel(ToolPanel.TRANSITION) })
+                                ToolButton(icon = Icons.Default.FilterFrames, label = "Filtros", onClick = { viewModel.setActivePanel(ToolPanel.FILTER) })
+                                ToolButton(icon = Icons.Default.Tune, label = "Ajustes", onClick = { viewModel.setActivePanel(ToolPanel.ADJUST) })
+                                ToolButton(icon = Icons.Default.AspectRatio, label = "Formato", onClick = { viewModel.setActivePanel(ToolPanel.CANVAS) })
+                            }
+                        }
+                    }
+
+                    // Sub-painel: EDITAR CLIPE
+                    val showEditTools = uiState.activePanel == ToolPanel.EDIT_TOOLS || (uiState.selectedClipId != null && uiState.activePanel == ToolPanel.NONE)
+
+                    if (showEditTools) {
+                        Surface(
+                            color = SurfaceElevated,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .navigationBarsPadding()
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                // Header: '<' Voltar | "Editar Clipe" | 'v' Confirmar
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Column(
-                                        modifier = Modifier.fillMaxSize(),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.Center
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.setActivePanel(ToolPanel.NONE)
+                                            viewModel.selectClip(null)
+                                        },
+                                        modifier = Modifier.size(32.dp).testTag("panel_back_button")
+                                    ) {
+                                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = Color.White, modifier = Modifier.size(20.dp))
+                                    }
+                                    Text(
+                                        text = "Editar Clipe",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.setActivePanel(ToolPanel.NONE)
+                                            viewModel.selectClip(null)
+                                        },
+                                        modifier = Modifier.size(32.dp).testTag("panel_confirm_button")
+                                    ) {
+                                        Icon(Icons.Default.Check, contentDescription = "Confirmar", tint = PrimaryPurpleLight, modifier = Modifier.size(20.dp))
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                val editTools = listOf(
+                                    Triple("Cortar", Icons.Default.ContentCut) { viewModel.setActivePanel(ToolPanel.TRIM) },
+                                    Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitClipAtPlayhead() },
+                                    Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedClip(); viewModel.setActivePanel(ToolPanel.NONE) },
+                                    Triple("Velocidade", Icons.Default.Speed) { viewModel.setActivePanel(ToolPanel.SPEED) },
+                                    Triple("Volume", Icons.Default.VolumeUp) { viewModel.setActivePanel(ToolPanel.AUDIO) },
+                                    Triple("Ajustes", Icons.Default.Tune) { viewModel.setActivePanel(ToolPanel.ADJUST) },
+                                    Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateClip() },
+                                    Triple("Inverter", Icons.Default.Refresh) { viewModel.setFeedback("Efeito reverso aplicado ao clipe.") },
+                                    Triple("Congelar", Icons.Default.AcUnit) { viewModel.setFeedback("Quadro congelado criado na linha do tempo.") },
+                                    Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CANVAS) },
+                                    Triple("Substituir", Icons.Default.SwapHoriz) { onNavigateToImport() },
+                                    Triple("Opacidade", Icons.Default.Opacity) { viewModel.setActivePanel(ToolPanel.TRANSFORM) }
+                                )
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    editTools.forEach { (label, icon, action) ->
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = SurfaceDark,
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                                            modifier = Modifier
+                                                .size(width = 80.dp, height = 66.dp)
+                                                .clickable(onClick = action)
+                                                .testTag("edit_tool_$label")
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.fillMaxSize(),
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = icon,
+                                                    contentDescription = label,
+                                                    tint = if (label == "Excluir") DangerRed else Color.White,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                                Spacer(modifier = Modifier.height(3.dp))
+                                                Text(
+                                                    text = label,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                    color = if (label == "Excluir") DangerRed else TextPrimary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (uiState.activePanel != ToolPanel.NONE) {
+                        Surface(
+                            color = SurfaceElevated,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .navigationBarsPadding()
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                // Header unificado com botão de fechar/voltar em todas as ferramentas
+                                val panelTitle = when (uiState.activePanel) {
+                                    ToolPanel.SPEED -> "Velocidade"
+                                    ToolPanel.FILTER -> "Filtros de Cor"
+                                    ToolPanel.ADJUST -> "Ajustes de Imagem"
+                                    ToolPanel.TRANSFORM -> "Transformação"
+                                    ToolPanel.AUDIO -> "Áudio"
+                                    ToolPanel.TEXT -> "Texto & Títulos"
+                                    ToolPanel.TEMPLATES -> "Modelos & Estilos"
+                                    ToolPanel.STICKER -> "Sobreposição & Stickers"
+                                    ToolPanel.TRANSITION -> "Transições"
+                                    ToolPanel.CANVAS -> "Formato & Proporção"
+                                    ToolPanel.VFX -> "Efeitos Visuais"
+                                    ToolPanel.TRIM -> "Cortar & Ajustar"
+                                    ToolPanel.FILES -> "Arquivos de Mídia"
+                                    ToolPanel.CAPTIONS -> "Legendas Automáticas"
+                                    else -> "Ferramenta"
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    IconButton(
+                                        onClick = { viewModel.setActivePanel(ToolPanel.NONE) },
+                                        modifier = Modifier.size(32.dp).testTag("panel_back_button")
                                     ) {
                                         Icon(
-                                            imageVector = icon,
-                                            contentDescription = label,
-                                            tint = if (label == "Excluir") DangerRed else Color.White,
-                                            modifier = Modifier.size(22.dp)
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = label,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = if (label == "Excluir") DangerRed else TextPrimary
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                            contentDescription = "Voltar",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
+
+                                    Text(
+                                        text = panelTitle,
+                                        color = TextPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp
+                                    )
+
+                                    IconButton(
+                                        onClick = { viewModel.setActivePanel(ToolPanel.NONE) },
+                                        modifier = Modifier.size(32.dp).testTag("panel_confirm_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Concluir",
+                                            tint = PrimaryPurpleLight,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+
+                                when (uiState.activePanel) {
+                                    ToolPanel.SPEED -> SpeedPanel(currentClip, viewModel)
+                                    ToolPanel.FILTER -> FilterPanel(currentClip, viewModel)
+                                    ToolPanel.ADJUST -> AdjustPanel(currentClip, viewModel)
+                                    ToolPanel.TRANSFORM -> TransformPanel(currentClip, viewModel)
+                                    ToolPanel.AUDIO -> AudioPanel(viewModel)
+                                    ToolPanel.TEXT -> TextPanel(project, uiState.selectedTextId, viewModel)
+                                    ToolPanel.TEMPLATES -> TemplatesPanel(project, viewModel)
+                                    ToolPanel.STICKER -> StickerPanel(project, uiState.selectedStickerId, viewModel)
+                                    ToolPanel.TRANSITION -> TransitionPanel(currentClip, viewModel)
+                                    ToolPanel.CANVAS -> CanvasPanel(project, viewModel)
+                                    ToolPanel.VFX -> VFXPanel(project, viewModel)
+                                    ToolPanel.TRIM -> TrimPanel(currentClip, viewModel)
+                                    ToolPanel.FILES -> FilesPanel(project, viewModel, onLaunchPicker = {
+                                        photoVideoPickerLauncher.launch(
+                                            androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                        )
+                                    })
+                                    else -> {}
                                 }
                             }
                         }
                     }
                 }
-            } else if (uiState.activePanel != ToolPanel.NONE) {
-                Surface(
-                    color = SurfaceElevated,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .navigationBarsPadding()
-                            .padding(14.dp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoPreviewContent(
+    project: ProjectItem,
+    uiState: EditorUiState,
+    playbackState: PlaybackState,
+    currentClip: MediaClip?,
+    viewModel: EditorViewModel,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        // Real Media3 Player / Photo Display with Real Effects & Transformations
+        if (project.clips.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Nenhum clipe na Timeline",
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+            }
+        } else {
+            TransitionAwareMediaSurface(
+                clips = project.clips,
+                activeVFX = project.activeVFX,
+                currentPlayheadMs = uiState.currentPositionMs,
+                activeClip = currentClip,
+                isPhotoActive = playbackState.isPhotoActive,
+                activePhotoPath = playbackState.activePhotoPath,
+                exoPlayer = viewModel.playerManager.exoPlayer,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // Buffering Indicator
+        if (playbackState.isBuffering) {
+            CircularProgressIndicator(
+                color = PrimaryPurpleVariant,
+                modifier = Modifier.size(36.dp).align(Alignment.Center)
+            )
+        }
+
+        // Error Message overlay if missing media or decode failure
+        if (playbackState.errorMessage != null) {
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = DangerRed.copy(alpha = 0.85f),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(8.dp)
+            ) {
+                Text(
+                    text = playbackState.errorMessage ?: "",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        // Real Stickers and Animated GIFs Layer
+        StickerLayer(
+            stickers = project.stickers,
+            currentPlayheadMs = uiState.currentPositionMs,
+            selectedStickerId = uiState.selectedStickerId,
+            onSelectSticker = {
+                viewModel.selectSticker(it)
+                if (it != null) viewModel.setActivePanel(ToolPanel.STICKER)
+            },
+            onMoveSticker = { id, newX, newY -> viewModel.updateStickerPosition(id, newX, newY) },
+            onDeleteSticker = { viewModel.removeSticker(it) },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Real Dynamic & Animated Text Overlays Layer
+        TextOverlayLayer(
+            texts = project.texts,
+            currentPlayheadMs = uiState.currentPositionMs,
+            selectedTextId = uiState.selectedTextId,
+            onSelectText = {
+                viewModel.selectTextOverlay(it)
+                if (it != null) viewModel.setActivePanel(ToolPanel.TEXT)
+            },
+            onMoveText = { id, newX, newY -> viewModel.updateTextOverlayPosition(id, newX, newY) },
+            onDeleteText = { viewModel.removeTextOverlay(it) },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Subtitles overlay
+        val activeSubtitle = project.subtitles.find {
+            uiState.currentPositionMs in it.startTimeMs..it.endTimeMs && it.isEnabled
+        }
+        if (activeSubtitle != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 24.dp)
+                    .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = activeSubtitle.text,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        // Watermark indicator (if not premium)
+        if (!uiState.isPremiumUser) {
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = Color.Black.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+            ) {
+                Text(
+                    text = "Boti Editor",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
+
+        // Play / Pause Overlay Button
+        IconButton(
+            onClick = { viewModel.togglePlayback() },
+            modifier = Modifier
+                .size(54.dp)
+                .background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                .align(Alignment.Center)
+                .testTag("play_pause_button")
+        ) {
+            Icon(
+                imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
+                tint = Color.White,
+                modifier = Modifier.size(32.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun FilesPanel(
+    project: ProjectItem,
+    viewModel: EditorViewModel,
+    onLaunchPicker: () -> Unit
+) {
+    var selectedCategory by remember { mutableIntStateOf(0) }
+    val categories = listOf("Todos", "Vídeos", "Fotos", "Áudio")
+
+    val filteredClips = remember(project.clips, selectedCategory) {
+        when (selectedCategory) {
+            1 -> project.clips.filter { it.type != MediaType.PHOTO }
+            2 -> project.clips.filter { it.type == MediaType.PHOTO }
+            else -> project.clips
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // Top row: Category chips & Import action button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                categories.forEachIndexed { index, cat ->
+                    val isSelected = selectedCategory == index
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isSelected) PrimaryPurple else SurfaceDark,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isSelected) PrimaryPurpleLight else BorderSubtle
+                        ),
+                        modifier = Modifier.clickable { selectedCategory = index }
                     ) {
-                        when (uiState.activePanel) {
-                            ToolPanel.SPEED -> SpeedPanel(currentClip, viewModel)
-                            ToolPanel.FILTER -> FilterPanel(currentClip, viewModel)
-                            ToolPanel.ADJUST -> AdjustPanel(currentClip, viewModel)
-                            ToolPanel.TRANSFORM -> TransformPanel(currentClip, viewModel)
-                            ToolPanel.AUDIO -> AudioPanel(viewModel)
-                            ToolPanel.TEXT -> TextPanel(project, uiState.selectedTextId, viewModel)
-                            ToolPanel.TEMPLATES -> TemplatesPanel(project, viewModel)
-                            ToolPanel.STICKER -> StickerPanel(project, uiState.selectedStickerId, viewModel)
-                            ToolPanel.TRANSITION -> TransitionPanel(currentClip, viewModel)
-                            ToolPanel.CANVAS -> CanvasPanel(project, viewModel)
-                            ToolPanel.VFX -> VFXPanel(project, viewModel)
-                            ToolPanel.TRIM -> TrimPanel(currentClip, viewModel)
-                            else -> {}
+                        Text(
+                            text = cat,
+                            color = if (isSelected) Color.White else TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Button(
+                onClick = onLaunchPicker,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier
+                    .height(34.dp)
+                    .testTag("files_import_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Adicionar", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        if (selectedCategory == 3) {
+            // Audios list
+            if (project.audios.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onLaunchPicker() }
+                        .padding(vertical = 8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.Audiotrack, contentDescription = null, tint = LayerAudioWave, modifier = Modifier.size(32.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Nenhum arquivo de áudio importado", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Toque em 'Adicionar' para importar músicas ou gravações", color = TextSecondary, fontSize = 11.sp)
+                    }
+                }
+            } else {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(project.audios, key = { it.id }) { audio ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = SurfaceDark,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier
+                                .width(140.dp)
+                                .clickable {
+                                    viewModel.selectAudioTrack(audio.id)
+                                    viewModel.setActivePanel(ToolPanel.AUDIO)
+                                }
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = LayerAudioWave.copy(alpha = 0.2f),
+                                    modifier = Modifier.padding(2.dp)
+                                ) {
+                                    Text("ÁUDIO", color = LayerAudioWave, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(audio.name, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text("${audio.durationMs / 1000}s", color = TextSecondary, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Video / Image Media Grid with proper aspect ratios & badges
+            if (filteredClips.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onLaunchPicker() }
+                        .padding(vertical = 8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.PermMedia, contentDescription = null, tint = PrimaryPurpleVariant, modifier = Modifier.size(32.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Nenhum arquivo nessa categoria", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Toque em 'Adicionar' para importar vídeos ou fotos da galeria", color = TextSecondary, fontSize = 11.sp)
+                    }
+                }
+            } else {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(filteredClips, key = { it.id }) { clip ->
+                        val isPhoto = clip.type == MediaType.PHOTO
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = SurfaceDark,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier
+                                .width(120.dp)
+                                .clickable {
+                                    viewModel.selectClip(clip.id)
+                                    viewModel.setFeedback("Clipe selecionado na timeline")
+                                }
+                        ) {
+                            Column {
+                                // Thumbnail with AspectRatio 16:9 constraint (UIAspectRatioConstraint)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(16f / 9f)
+                                        .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                                        .background(Color(0xFF1A1A24)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val thumbModel = when {
+                                        clip.thumbnailPath.isNotBlank() -> File(clip.thumbnailPath)
+                                        clip.localPath.isNotBlank() -> File(clip.localPath)
+                                        else -> clip.uri
+                                    }
+                                    AsyncImage(
+                                        model = thumbModel,
+                                        contentDescription = clip.title,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+
+                                    // Type badge (Video vs Photo)
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (isPhoto) SuccessGreen.copy(alpha = 0.85f) else PrimaryPurple.copy(alpha = 0.85f),
+                                        modifier = Modifier
+                                            .align(Alignment.BottomStart)
+                                            .padding(4.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isPhoto) Icons.Default.Image else Icons.Default.Videocam,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(10.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                            Text(
+                                                text = if (isPhoto) "FOTO" else "${clip.durationMs / 1000}s",
+                                                color = Color.White,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Title
+                                Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                                    Text(
+                                        text = clip.title,
+                                        color = TextPrimary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
                         }
                     }
                 }

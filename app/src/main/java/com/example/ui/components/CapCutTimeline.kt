@@ -283,15 +283,17 @@ fun CapCutMultiTrackTimeline(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(totalTracksHeight)
+                .weight(1f, fill = false)
+                .heightIn(min = 140.dp, max = totalTracksHeight)
+                .verticalScroll(rememberScrollState())
         ) {
             // LEFT COLUMN: Fixed Track Control Headers
             Column(
                 modifier = Modifier
-                    .width(76.dp)
-                    .fillMaxHeight()
+                    .width(72.dp)
+                    .height(totalTracksHeight)
                     .background(Color(0xFF111118))
-                    .border(androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle))
+                    .border(androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF1E1E2A)))
             ) {
                 // Header space matching Time Ruler height
                 Box(
@@ -381,7 +383,7 @@ fun CapCutMultiTrackTimeline(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxHeight()
+                    .height(totalTracksHeight)
                     .horizontalScroll(scrollState)
             ) {
                 // Tracks Stack
@@ -938,7 +940,7 @@ fun CapCutMultiTrackTimeline(
 }
 
 /**
- * Single Track Control Header item in the left column
+ * Single Track Control Header item in the left column - simplified, clean and responsive
  */
 @Composable
 private fun TrackHeaderItem(
@@ -956,8 +958,8 @@ private fun TrackHeaderItem(
     onAdd: () -> Unit
 ) {
     Surface(
-        color = Color(0xFF13131D),
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF222233)),
+        color = Color(0xFF13131A),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF1E1E2A)),
         modifier = Modifier
             .fillMaxWidth()
             .height(height)
@@ -968,75 +970,54 @@ private fun TrackHeaderItem(
                 .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalArrangement = Arrangement.Center
         ) {
+            // Top Row: Colored indicator dot + Track name + Clean Add Button (+)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = trackName,
-                        tint = color,
-                        modifier = Modifier.size(14.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(color)
                     )
-                    Spacer(modifier = Modifier.width(3.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = trackName,
-                        color = Color.White,
+                        color = Color.White.copy(alpha = 0.9f),
                         fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                // Add button for this layer
+                // Sleek, minimal Add action button
                 IconButton(
                     onClick = onAdd,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = "Adicionar $trackName",
-                        tint = Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(12.dp)
+                        tint = color.copy(alpha = 0.9f),
+                        modifier = Modifier.size(13.dp)
                     )
                 }
             }
 
-            // Quick Track Toggles: Lock, Eye, Mute
+            // Bottom Row: Simplified grouped toggles (unobtrusive until toggled)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // Lock toggle
-                IconButton(
-                    onClick = onToggleLock,
-                    modifier = Modifier.size(18.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
-                        contentDescription = "Travar",
-                        tint = if (isLocked) GoldPremium else TextTertiary,
-                        modifier = Modifier.size(11.dp)
-                    )
-                }
-
-                // Visibility toggle
-                IconButton(
-                    onClick = onToggleVisibility,
-                    modifier = Modifier.size(18.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                        contentDescription = "Visibilidade",
-                        tint = if (isVisible) TextSecondary else TextTertiary,
-                        modifier = Modifier.size(11.dp)
-                    )
-                }
-
-                // Mute toggle (if supported by track)
+                // Visibility / Mute toggle
                 if (showMute && onToggleMute != null) {
                     IconButton(
                         onClick = onToggleMute,
@@ -1044,11 +1025,36 @@ private fun TrackHeaderItem(
                     ) {
                         Icon(
                             imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                            contentDescription = "Mudo",
-                            tint = if (isMuted) DangerRed else TextSecondary,
+                            contentDescription = if (isMuted) "Ativar som" else "Mutar",
+                            tint = if (isMuted) DangerRed else Color(0xFF6B7280),
                             modifier = Modifier.size(11.dp)
                         )
                     }
+                } else {
+                    IconButton(
+                        onClick = onToggleVisibility,
+                        modifier = Modifier.size(18.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                            contentDescription = if (isVisible) "Ocultar" else "Mostrar",
+                            tint = if (isVisible) Color(0xFF6B7280) else DangerRed,
+                            modifier = Modifier.size(11.dp)
+                        )
+                    }
+                }
+
+                // Lock toggle
+                IconButton(
+                    onClick = onToggleLock,
+                    modifier = Modifier.size(18.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                        contentDescription = if (isLocked) "Destravar" else "Travar",
+                        tint = if (isLocked) GoldPremium else Color(0xFF6B7280),
+                        modifier = Modifier.size(11.dp)
+                    )
                 }
             }
         }
