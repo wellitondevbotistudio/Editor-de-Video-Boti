@@ -32,14 +32,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 import com.example.model.*
 import com.example.ui.theme.*
 import com.example.util.TimelineUtils
 import java.io.File
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 // Pro CapCut-style Multi-Layer Colors
 val LayerTextBg = Color(0xFFD9534F) // Terracotta Coral
@@ -93,11 +96,14 @@ fun CapCutMultiTrackTimeline(
     onMoveText: ((textId: String, newStartMs: Long) -> Unit)? = null,
     onMoveSticker: ((stickerId: String, newStartMs: Long) -> Unit)? = null,
     onMoveAudio: ((audioId: String, newStartMs: Long) -> Unit)? = null,
+    onReorderClip: ((fromIndex: Int, toIndex: Int) -> Unit)? = null,
     onAddOverlay: (() -> Unit)? = null,
+    onClearSelection: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var zoomScale by remember { mutableFloatStateOf(1.0f) } // 0.6x to 2.5x
-    val scrollState = rememberScrollState()
+    var zoomScale by remember { mutableFloatStateOf(1.0f) } // 0.6x to 3.5x
+    val horizontalScrollState = rememberScrollState()
+    val verticalScrollState = rememberScrollState()
 
     // Track states: Lock, Mute, Visibility
     var isTextLocked by remember { mutableStateOf(false) }
@@ -251,7 +257,7 @@ fun CapCutMultiTrackTimeline(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Zoom Out
                 IconButton(
-                    onClick = { zoomScale = (zoomScale - 0.2f).coerceAtLeast(0.6f) },
+                    onClick = { zoomScale = (zoomScale - 0.3f).coerceAtLeast(0.6f) },
                     modifier = Modifier.size(26.dp)
                 ) {
                     Icon(Icons.Default.Remove, contentDescription = "Zoom -", tint = TextSecondary, modifier = Modifier.size(14.dp))
@@ -262,12 +268,12 @@ fun CapCutMultiTrackTimeline(
                     color = TextSecondary,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.width(34.dp)
+                    modifier = Modifier.width(36.dp)
                 )
 
                 // Zoom In
                 IconButton(
-                    onClick = { zoomScale = (zoomScale + 0.2f).coerceAtMost(2.5f) },
+                    onClick = { zoomScale = (zoomScale + 0.3f).coerceAtMost(3.5f) },
                     modifier = Modifier.size(26.dp)
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "Zoom +", tint = TextSecondary, modifier = Modifier.size(14.dp))
@@ -275,17 +281,88 @@ fun CapCutMultiTrackTimeline(
             }
         }
 
-        // 2. Timeline Tracks Body (Left Column: Track Headers | Right Column: Synchronized Layers Canvas)
+        // 2. FIXED TIME RULER & HEADER (Permanece sempre fixo no topo, sem subir ao rolar as camadas)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF13131D))
+                .border(androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF1E1E2A)))
+        ) {
+            // Cabeçalho fixo esquerdo correspondente às faixas (72.dp)
+            Box(
+                modifier = Modifier
+                    .width(72.dp)
+                    .height(28.dp)
+                    .background(Color(0xFF161622)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Camadas", color = TextTertiary, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            }
+
+            // Régua temporal fixa correspondente ao canvas de faixas (sincronizada horizontalmente)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(28.dp)
+                    .horizontalScroll(horizontalScrollState)
+            ) {
+                TimeRuler(
+                    totalDurationMs = safeTotalMs,
+                    dpPerSecond = dpPerSecond,
+                    zoomScale = zoomScale,
+                    widthDp = timelineWidthDp + 150.dp,
+                    onSeek = onSeek
+                )
+
+                // Agulha do Playhead na Régua Superior com arraste contínuo
+                val needleOffsetDp = msToDp(currentPositionMs)
+                val density = LocalDensity.current
+                Box(
+                    modifier = Modifier
+                        .offset(x = needleOffsetDp - 12.dp)
+                        .width(24.dp)
+                        .fillMaxHeight()
+                        .pointerInput(safeTotalMs, dpPerSecond) {
+                            var dragNeedleMs = 0L
+                            detectDragGestures(
+                                onDragStart = { dragNeedleMs = currentPositionMs },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                    if (pxPerSec > 0) {
+                                        val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
+                                        dragNeedleMs = (dragNeedleMs + deltaMs).coerceIn(0L, safeTotalMs)
+                                        onSeek(dragNeedleMs)
+                                    }
+                                }
+                            )
+                        },
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Canvas(modifier = Modifier.size(12.dp, 8.dp)) {
+                        val path = androidx.compose.ui.graphics.Path().apply {
+                            moveTo(0f, 0f)
+                            lineTo(size.width / 2f, size.height)
+                            lineTo(size.width, 0f)
+                            close()
+                        }
+                        drawPath(path, color = Color.White)
+                    }
+                }
+            }
+        }
+
+        // 3. Timeline Tracks Body (Left Column: Track Headers | Right Column: Synchronized Layers Canvas)
         val audioTrackCount = max(1, project.audios.size)
         val audioHeaderHeight = (42 * audioTrackCount).dp
-        val totalTracksHeight = (220 + 42 * audioTrackCount).dp
+        val totalTracksHeight = (180 + 42 * audioTrackCount).dp
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f, fill = false)
-                .heightIn(min = 140.dp, max = totalTracksHeight)
-                .verticalScroll(rememberScrollState())
+                .heightIn(min = 90.dp, max = totalTracksHeight)
+                .verticalScroll(verticalScrollState)
         ) {
             // LEFT COLUMN: Fixed Track Control Headers
             Column(
@@ -295,17 +372,6 @@ fun CapCutMultiTrackTimeline(
                     .background(Color(0xFF111118))
                     .border(androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF1E1E2A)))
             ) {
-                // Header space matching Time Ruler height
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(28.dp)
-                        .background(Color(0xFF161622)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Camadas", color = TextTertiary, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                }
-
                 // 1. Text Track Header
                 TrackHeaderItem(
                     trackName = "Texto",
@@ -384,7 +450,12 @@ fun CapCutMultiTrackTimeline(
                 modifier = Modifier
                     .weight(1f)
                     .height(totalTracksHeight)
-                    .horizontalScroll(scrollState)
+                    .horizontalScroll(horizontalScrollState)
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            onClearSelection?.invoke()
+                        }
+                    }
             ) {
                 // Tracks Stack
                 Column(
@@ -392,14 +463,6 @@ fun CapCutMultiTrackTimeline(
                         .width(timelineWidthDp + 150.dp)
                         .fillMaxHeight()
                 ) {
-                    // Time Ruler at the top
-                    TimeRuler(
-                        totalDurationMs = safeTotalMs,
-                        dpPerSecond = dpPerSecond,
-                        widthDp = timelineWidthDp + 150.dp,
-                        onSeek = onSeek
-                    )
-
                     // 1. Text & Subtitles Layer
                     Box(
                         modifier = Modifier
@@ -588,9 +651,13 @@ fun CapCutMultiTrackTimeline(
                                 modifier = Modifier.fillMaxHeight(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                var dragClipId by remember { mutableStateOf<String?>(null) }
+                                var dragOffsetPx by remember { mutableFloatStateOf(0f) }
+
                                 var accumulatedMs = 0L
                                 project.clips.forEachIndexed { index, clip ->
                                     val isSelected = clip.id == selectedClipId
+                                    val isBeingDragged = clip.id == dragClipId
                                     val clipDurationMs = TimelineUtils.calculateClipTimelineDuration(clip)
                                     val clipWidthDp = max(60f, (clipDurationMs / 1000f) * dpPerSecond).dp
 
@@ -598,12 +665,47 @@ fun CapCutMultiTrackTimeline(
                                         shape = RoundedCornerShape(8.dp),
                                         color = LayerVideoBg,
                                         border = androidx.compose.foundation.BorderStroke(
-                                            width = if (isSelected) 2.dp else 1.dp,
-                                            color = if (isSelected) Color(0xFFFBBF24) else Color(0xFF334155) // Golden border when selected
+                                            width = if (isSelected || isBeingDragged) 2.dp else 1.dp,
+                                            color = if (isSelected || isBeingDragged) Color(0xFFFBBF24) else Color(0xFF334155) // Golden border when selected
                                         ),
                                         modifier = Modifier
                                             .width(clipWidthDp)
                                             .fillMaxHeight()
+                                            .offset {
+                                                if (isBeingDragged) IntOffset(dragOffsetPx.roundToInt(), 0)
+                                                else IntOffset.Zero
+                                            }
+                                            .zIndex(if (isBeingDragged) 10f else 1f)
+                                            .shadow(if (isBeingDragged) 10.dp else 0.dp, RoundedCornerShape(8.dp))
+                                            .pointerInput(clip.id, clipWidthDp) {
+                                                detectDragGestures(
+                                                    onDragStart = {
+                                                        dragClipId = clip.id
+                                                        dragOffsetPx = 0f
+                                                        onSelectClip(clip.id)
+                                                    },
+                                                    onDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        dragOffsetPx += dragAmount.x
+                                                    },
+                                                    onDragEnd = {
+                                                        val clipWpx = with(density) { clipWidthDp.toPx() }
+                                                        if (clipWpx > 0 && Math.abs(dragOffsetPx) > clipWpx * 0.4f) {
+                                                            val shift = if (dragOffsetPx > 0) 1 else -1
+                                                            val targetIdx = (index + shift).coerceIn(0, project.clips.lastIndex)
+                                                            if (targetIdx != index) {
+                                                                onReorderClip?.invoke(index, targetIdx)
+                                                            }
+                                                        }
+                                                        dragClipId = null
+                                                        dragOffsetPx = 0f
+                                                    },
+                                                    onDragCancel = {
+                                                        dragClipId = null
+                                                        dragOffsetPx = 0f
+                                                    }
+                                                )
+                                            }
                                             .clickable { onSelectClip(clip.id) }
                                             .testTag("track_clip_${clip.id}")
                                     ) {
@@ -890,36 +992,39 @@ fun CapCutMultiTrackTimeline(
                     }
                 }
 
-                // UNIFIED PLAYHEAD: Vertical glowing line spanning all layers
+                // UNIFIED PLAYHEAD: Vertical glowing line spanning all layers with full-height touch drag
                 val playheadOffsetDp = msToDp(currentPositionMs)
                 Box(
                     modifier = Modifier
-                        .offset(x = playheadOffsetDp)
-                        .width(2.dp)
+                        .offset(x = playheadOffsetDp - 18.dp)
+                        .width(36.dp)
                         .fillMaxHeight()
-                        .background(Color.White)
-                        .shadow(4.dp, spotColor = Color.White)
-                )
-
-                // Interactive Scrubber Handle on Playhead
-                Box(
-                    modifier = Modifier
-                        .offset(x = playheadOffsetDp - 14.dp)
-                        .width(28.dp)
-                        .height(30.dp)
                         .pointerInput(safeTotalMs, dpPerSecond) {
-                            detectDragGestures { change, dragAmount ->
-                                change.consume()
-                                val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                if (pxPerSec > 0) {
-                                    val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                    val newPos = (currentPositionMs + deltaMs).coerceIn(0L, safeTotalMs)
-                                    onSeek(newPos)
+                            var dragTrackMs = 0L
+                            detectDragGestures(
+                                onDragStart = { dragTrackMs = currentPositionMs },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                    if (pxPerSec > 0) {
+                                        val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
+                                        dragTrackMs = (dragTrackMs + deltaMs).coerceIn(0L, safeTotalMs)
+                                        onSeek(dragTrackMs)
+                                    }
                                 }
-                            }
+                            )
                         },
                     contentAlignment = Alignment.TopCenter
                 ) {
+                    // Vertical glowing indicator line
+                    Box(
+                        modifier = Modifier
+                            .width(2.dp)
+                            .fillMaxHeight()
+                            .background(Color.White)
+                            .shadow(4.dp, spotColor = Color.White)
+                    )
+                    // Top handle indicator
                     Canvas(
                         modifier = Modifier
                             .size(16.dp)
@@ -1062,17 +1167,19 @@ private fun TrackHeaderItem(
 }
 
 /**
- * Top Time Ruler with timestamp markers and interactive seek on tap/drag.
+ * Top Time Ruler with timestamp markers (seconds and milliseconds) and interactive seek on tap/drag.
  */
 @Composable
 private fun TimeRuler(
     totalDurationMs: Long,
     dpPerSecond: Float,
+    zoomScale: Float,
     widthDp: Dp,
     onSeek: (Long) -> Unit
 ) {
     val density = LocalDensity.current
     val totalSeconds = (totalDurationMs / 1000).toInt() + 4
+    val showMillis = zoomScale >= 2.0f
 
     Surface(
         color = Color(0xFF161624),
@@ -1104,47 +1211,96 @@ private fun TimeRuler(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val pxPerSec = dpPerSecond.dp.toPx()
 
-            for (sec in 0..totalSeconds) {
-                val x = sec * pxPerSec
+            if (showMillis) {
+                // Ticks a cada 200ms ou 100ms em zoom alto
+                val stepMs = if (zoomScale >= 2.8f) 100L else 200L
+                val pxPerMs = pxPerSec / 1000f
+                val totalSteps = (totalDurationMs / stepMs).toInt() + 8
 
-                // Major second tick
-                drawLine(
-                    color = Color.White.copy(alpha = 0.5f),
-                    start = Offset(x, size.height - 10f),
-                    end = Offset(x, size.height),
-                    strokeWidth = 2f
-                )
+                for (step in 0..totalSteps) {
+                    val ms = step * stepMs
+                    val x = ms * pxPerMs
+                    val isSecond = (ms % 1000L) == 0L
+                    val isHalf = (ms % 500L) == 0L
 
-                // Half second tick
-                val halfX = x + (pxPerSec / 2f)
-                drawLine(
-                    color = Color.White.copy(alpha = 0.25f),
-                    start = Offset(halfX, size.height - 5f),
-                    end = Offset(halfX, size.height),
-                    strokeWidth = 1f
-                )
+                    drawLine(
+                        color = if (isSecond) Color.White.copy(alpha = 0.8f) else if (isHalf) Color.White.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.2f),
+                        start = Offset(x, size.height - (if (isSecond) 12f else if (isHalf) 8f else 5f)),
+                        end = Offset(x, size.height),
+                        strokeWidth = if (isSecond) 2f else 1f
+                    )
+                }
+            } else {
+                for (sec in 0..totalSeconds) {
+                    val x = sec * pxPerSec
+
+                    // Major second tick
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.5f),
+                        start = Offset(x, size.height - 10f),
+                        end = Offset(x, size.height),
+                        strokeWidth = 2f
+                    )
+
+                    // Half second tick
+                    val halfX = x + (pxPerSec / 2f)
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.25f),
+                        start = Offset(halfX, size.height - 5f),
+                        end = Offset(halfX, size.height),
+                        strokeWidth = 1f
+                    )
+                }
             }
         }
 
-        // Timestamp labels (00:00, 00:01, 00:02...)
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.Top
-        ) {
-            for (sec in 0..totalSeconds) {
-                val min = sec / 60
-                val s = sec % 60
-                val timeLabel = String.format("%02d:%02d", min, s)
+        // Timestamp labels (com milissegundos em zoom alto)
+        if (showMillis) {
+            val stepMs = if (zoomScale >= 2.8f) 200L else 500L
+            val totalSteps = (totalDurationMs / stepMs).toInt() + 4
 
-                Text(
-                    text = timeLabel,
-                    color = TextTertiary,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .width(dpPerSecond.dp)
-                        .padding(start = 2.dp, top = 2.dp)
-                )
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.Top
+            ) {
+                for (step in 0..totalSteps) {
+                    val ms = step * stepMs
+                    val min = (ms / 60000).toInt()
+                    val s = ((ms % 60000) / 1000).toInt()
+                    val frac = (ms % 1000).toInt()
+                    val timeLabel = String.format("%02d:%02d.%03d", min, s, frac)
+
+                    Text(
+                        text = timeLabel,
+                        color = PrimaryPurpleLight,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .width((stepMs * dpPerSecond / 1000f).dp)
+                            .padding(start = 2.dp, top = 2.dp)
+                    )
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.Top
+            ) {
+                for (sec in 0..totalSeconds) {
+                    val min = sec / 60
+                    val s = sec % 60
+                    val timeLabel = String.format("%02d:%02d", min, s)
+
+                    Text(
+                        text = timeLabel,
+                        color = TextTertiary,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .width(dpPerSecond.dp)
+                            .padding(start = 2.dp, top = 2.dp)
+                    )
+                }
             }
         }
     }

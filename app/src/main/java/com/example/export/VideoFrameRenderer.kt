@@ -199,16 +199,32 @@ class VideoFrameRenderer(
         bitmapPaint.alpha = ((clip.opacity * transform.alpha).coerceIn(0f, 1f) * 255).toInt()
 
         if (srcBitmap != null && !srcBitmap.isRecycled) {
-            // Desenha com Letterbox/Fit perfeito mantendo aspect ratio
+            // Desenha com Letterbox/Fit perfeito mantendo aspect ratio e recorte (Crop)
             val srcW = srcBitmap.width.toFloat()
             val srcH = srcBitmap.height.toFloat()
-            val scale = min(targetWidth / srcW, targetHeight / srcH)
-            val dstW = srcW * scale
-            val dstH = srcH * scale
+
+            val targetCropRatio = when (clip.cropRatio) {
+                "1:1" -> 1f
+                "16:9" -> 16f / 9f
+                "9:16" -> 9f / 16f
+                "4:5" -> 4f / 5f
+                "4:3" -> 4f / 3f
+                else -> srcW / srcH
+            }
+
+            val currentSrcRatio = srcW / srcH
+            val cropW = if (currentSrcRatio > targetCropRatio) srcH * targetCropRatio else srcW
+            val cropH = if (currentSrcRatio > targetCropRatio) srcH else srcW / targetCropRatio
+            val cropX = (srcW - cropW) / 2f
+            val cropY = (srcH - cropH) / 2f
+            val srcRect = Rect(cropX.toInt(), cropY.toInt(), (cropX + cropW).toInt(), (cropY + cropH).toInt())
+
+            val scale = min(targetWidth / cropW, targetHeight / cropH)
+            val dstW = cropW * scale
+            val dstH = cropH * scale
             val left = (targetWidth - dstW) / 2f
             val top = (targetHeight - dstH) / 2f
 
-            val srcRect = Rect(0, 0, srcBitmap.width, srcBitmap.height)
             val dstRect = RectF(left, top, left + dstW, top + dstH)
             canvas.drawBitmap(srcBitmap, srcRect, dstRect, bitmapPaint)
         } else {

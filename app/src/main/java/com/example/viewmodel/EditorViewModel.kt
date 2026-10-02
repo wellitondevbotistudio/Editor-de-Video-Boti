@@ -97,7 +97,6 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     it.copy(
                         isPlaying = playState.isPlaying,
                         currentPositionMs = playState.currentPositionMs,
-                        selectedClipId = playState.currentClipId ?: it.selectedClipId,
                         feedbackMessage = playState.errorMessage ?: it.feedbackMessage
                     )
                 }
@@ -115,9 +114,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
                     val updatedClip = if (state.selectedClipId != null && updatedCurrent != null) {
                         if (updatedCurrent.clips.any { it.id == state.selectedClipId }) state.selectedClipId
-                        else updatedCurrent.clips.firstOrNull()?.id
+                        else null
                     } else {
-                        updatedCurrent?.clips?.firstOrNull()?.id
+                        null
                     }
 
                     if (updatedCurrent != null) {
@@ -193,7 +192,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val selectedId = if (project.clips.any { it.id == _uiState.value.selectedClipId }) {
             _uiState.value.selectedClipId
         } else {
-            project.clips.firstOrNull()?.id
+            null
         }
 
         playerManager.setClipsAndAudios(project.clips, project.audios, initialSeekPlayhead = clampedPlayhead)
@@ -249,7 +248,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun seekTo(positionMs: Long) {
-        playerManager.seekTo(positionMs)
+        val total = getTotalDurationMs()
+        val clamped = positionMs.coerceIn(0L, maxOf(0L, total))
+        _uiState.update { it.copy(currentPositionMs = clamped) }
+        playerManager.seekTo(clamped)
     }
 
     fun rewind(stepMs: Long = 5000L) {
@@ -275,7 +277,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectClip(clipId: String?, seekToClipStart: Boolean = false) {
-        _uiState.update { it.copy(selectedClipId = clipId) }
+        _uiState.update {
+            it.copy(
+                selectedClipId = clipId,
+                selectedTextId = if (clipId != null) null else it.selectedTextId,
+                selectedStickerId = if (clipId != null) null else it.selectedStickerId,
+                selectedAudioTrackId = if (clipId != null) null else it.selectedAudioTrackId
+            )
+        }
         if (seekToClipStart && clipId != null) {
             val cur = _uiState.value.currentProject ?: return
             val idx = cur.clips.indexOfFirst { it.id == clipId }
@@ -283,6 +292,17 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 val start = TimelineUtils.getClipStartTimelineMs(cur.clips, idx)
                 seekTo(start)
             }
+        }
+    }
+
+    fun clearAllSelections() {
+        _uiState.update {
+            it.copy(
+                selectedClipId = null,
+                selectedTextId = null,
+                selectedStickerId = null,
+                selectedAudioTrackId = null
+            )
         }
     }
 
@@ -298,7 +318,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             it.copy(
                 currentProject = project,
                 currentPositionMs = 0L,
-                selectedClipId = project.clips.firstOrNull()?.id,
+                selectedClipId = null,
+                selectedTextId = null,
+                selectedStickerId = null,
+                selectedAudioTrackId = null,
                 activePanel = ToolPanel.NONE
             )
         }
@@ -386,7 +409,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             state.copy(
                 currentProject = newProj,
                 currentPositionMs = 0L,
-                selectedClipId = newProj.clips.firstOrNull()?.id,
+                selectedClipId = null,
                 activePanel = ToolPanel.NONE
             )
         }
@@ -873,6 +896,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         setFeedback("Transformações redefinidas")
     }
 
+    fun updateClipCropRatio(cropRatio: String, clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == targetId) {
+                clip.copy(cropRatio = cropRatio)
+            } else clip
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        setFeedback("Recorte do clipe: $cropRatio")
+    }
+
     fun updateClipTransition(transitionName: String?, durationMs: Long? = null, clipId: String? = null) {
         val cur = _uiState.value.currentProject ?: return
         val targetId = clipId ?: _uiState.value.selectedClipId ?: return
@@ -905,7 +940,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     // ---------------- TEXT OVERLAY MANAGEMENT ----------------
 
     fun selectTextOverlay(id: String?) {
-        _uiState.update { it.copy(selectedTextId = id, selectedStickerId = null) }
+        _uiState.update {
+            it.copy(
+                selectedTextId = id,
+                selectedStickerId = if (id != null) null else it.selectedStickerId,
+                selectedClipId = if (id != null) null else it.selectedClipId,
+                selectedAudioTrackId = if (id != null) null else it.selectedAudioTrackId
+            )
+        }
     }
 
     fun addTextOverlay(text: String, colorHex: String = "#FFFFFF") {
@@ -1051,7 +1093,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     // ---------------- STICKER & GIF MANAGEMENT ----------------
 
     fun selectSticker(id: String?) {
-        _uiState.update { it.copy(selectedStickerId = id, selectedTextId = null) }
+        _uiState.update {
+            it.copy(
+                selectedStickerId = id,
+                selectedTextId = if (id != null) null else it.selectedTextId,
+                selectedClipId = if (id != null) null else it.selectedClipId,
+                selectedAudioTrackId = if (id != null) null else it.selectedAudioTrackId
+            )
+        }
     }
 
     fun addSticker(sticker: StickerItem) {
@@ -1129,7 +1178,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     // ---------------- MULTI-TRACK AUDIO MANAGEMENT ----------------
 
     fun selectAudioTrack(id: String?) {
-        _uiState.update { it.copy(selectedAudioTrackId = id) }
+        _uiState.update {
+            it.copy(
+                selectedAudioTrackId = id,
+                selectedClipId = if (id != null) null else it.selectedClipId,
+                selectedTextId = if (id != null) null else it.selectedTextId,
+                selectedStickerId = if (id != null) null else it.selectedStickerId
+            )
+        }
     }
 
     fun addAudioTrack(track: AudioTrackItem) {

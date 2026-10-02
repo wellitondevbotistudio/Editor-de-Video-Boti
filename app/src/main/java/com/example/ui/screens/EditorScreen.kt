@@ -13,6 +13,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,6 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -627,6 +632,7 @@ fun EditorScreen(
                         },
                         onMoveClipLeft = { uiState.selectedClipId?.let { viewModel.moveClipLeft(it) } },
                         onMoveClipRight = { uiState.selectedClipId?.let { viewModel.moveClipRight(it) } },
+                        onReorderClip = { from, to -> viewModel.reorderClip(from, to) },
                         onDuplicateSelected = { viewModel.duplicateClip() },
                         onMoveText = { textId, newStart ->
                             val txt = project.texts.find { it.id == textId }
@@ -644,6 +650,7 @@ fun EditorScreen(
                             viewModel.updateAudioTrackPosition(audioId, newStart)
                         },
                         onAddOverlay = { viewModel.setActivePanel(ToolPanel.STICKER) },
+                        onClearSelection = { viewModel.clearAllSelections() },
                         modifier = Modifier.weight(1f)
                     )
 
@@ -944,6 +951,9 @@ private fun VideoPreviewContent(
             }
         }
 
+        val isAnyOverlaySelected = uiState.selectedTextId != null || uiState.selectedStickerId != null
+        val isClipSelected = currentClip != null && uiState.selectedClipId == currentClip.id
+
         // Real Stickers and Animated GIFs Layer
         StickerLayer(
             stickers = project.stickers,
@@ -954,6 +964,8 @@ private fun VideoPreviewContent(
                 if (it != null) viewModel.setActivePanel(ToolPanel.STICKER)
             },
             onMoveSticker = { id, newX, newY -> viewModel.updateStickerPosition(id, newX, newY) },
+            onScaleSticker = { id, scale -> viewModel.updateStickerScale(id, scale) },
+            onRotateSticker = { id, rot -> viewModel.updateStickerRotation(id, rot) },
             onDeleteSticker = { viewModel.removeSticker(it) },
             modifier = Modifier.fillMaxSize()
         )
@@ -968,9 +980,32 @@ private fun VideoPreviewContent(
                 if (it != null) viewModel.setActivePanel(ToolPanel.TEXT)
             },
             onMoveText = { id, newX, newY -> viewModel.updateTextOverlayPosition(id, newX, newY) },
+            onScaleText = { id, scale -> viewModel.updateTextOverlayScale(id, scale) },
+            onRotateText = { id, rot -> viewModel.updateTextOverlayRotation(id, rot) },
             onDeleteText = { viewModel.removeTextOverlay(it) },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Direct Preview Manipulation Overlay for Selected Video/Photo Clip
+        if (isClipSelected && currentClip != null) {
+            ClipDirectManipulationOverlay(
+                clip = currentClip,
+                viewModel = viewModel,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else if (!isAnyOverlaySelected && currentClip != null) {
+            // Tap on video preview surface selects the active clip
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        viewModel.selectClip(currentClip.id)
+                    }
+            )
+        }
 
         // Subtitles overlay
         val activeSubtitle = project.subtitles.find {
@@ -1012,21 +1047,209 @@ private fun VideoPreviewContent(
             }
         }
 
-        // Play / Pause Overlay Button
-        IconButton(
-            onClick = { viewModel.togglePlayback() },
+        // Play / Pause Overlay Button (only shown when no element is selected for manipulation)
+        if (!isClipSelected && !isAnyOverlaySelected) {
+            IconButton(
+                onClick = { viewModel.togglePlayback() },
+                modifier = Modifier
+                    .size(54.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                    .align(Alignment.Center)
+                    .testTag("play_pause_button")
+            ) {
+                Icon(
+                    imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
+                    tint = Color.White,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ClipDirectManipulationOverlay(
+    clip: MediaClip,
+    viewModel: EditorViewModel,
+    modifier: Modifier = Modifier
+) {
+    var isDragging by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                scaleX = clip.scale * (if (clip.flipHorizontal) -1f else 1f)
+                scaleY = clip.scale * (if (clip.flipVertical) -1f else 1f)
+                rotationZ = clip.rotation
+                translationX = clip.positionX
+                translationY = clip.positionY
+            }
+            .pointerInput(clip.id) {
+                detectTransformGestures { _, pan, zoom, rotationChange ->
+                    var newScale = clip.scale
+                    if (zoom != 1.0f) {
+                        newScale = (clip.scale * zoom).coerceIn(0.2f, 4.0f)
+                    }
+                    val newRotation = if (rotationChange != 0f) {
+                        (clip.rotation + rotationChange) % 360f
+                    } else clip.rotation
+
+                    val newPosX = clip.positionX + pan.x
+                    val newPosY = clip.positionY + pan.y
+
+                    viewModel.updateClipTransform(
+                        scale = newScale,
+                        rotation = newRotation,
+                        positionX = newPosX,
+                        positionY = newPosY,
+                        clipId = clip.id
+                    )
+                }
+            }
+            .pointerInput(clip.id, isDragging) {
+                detectDragGestures(
+                    onDragStart = { isDragging = true },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        val newX = clip.positionX + dragAmount.x
+                        val newY = clip.positionY + dragAmount.y
+                        viewModel.updateClipTransform(
+                            positionX = newX,
+                            positionY = newY,
+                            clipId = clip.id
+                        )
+                    },
+                    onDragEnd = { isDragging = false },
+                    onDragCancel = { isDragging = false }
+                )
+            }
+            .border(
+                width = 2.dp,
+                color = if (isDragging) Color(0xFFFBBF24) else Color(0xFFFBBF24).copy(alpha = 0.85f),
+                shape = RoundedCornerShape(4.dp)
+            )
+            .testTag("clip_manipulation_overlay_${clip.id}")
+    ) {
+        // Alça Superior Esquerda: Girar 45°
+        Surface(
+            shape = CircleShape,
+            color = Color(0xFF1E293B),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFBBF24)),
             modifier = Modifier
-                .size(54.dp)
-                .background(Color.Black.copy(alpha = 0.45f), CircleShape)
-                .align(Alignment.Center)
-                .testTag("play_pause_button")
+                .size(32.dp)
+                .align(Alignment.TopStart)
+                .offset(x = (-10).dp, y = (-10).dp)
+                .clickable {
+                    val nextRot = (clip.rotation + 45f) % 360f
+                    viewModel.updateClipTransform(rotation = nextRot, clipId = clip.id)
+                }
+                .testTag("clip_rotate_handle_${clip.id}")
         ) {
             Icon(
-                imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
-                tint = Color.White,
-                modifier = Modifier.size(32.dp)
+                imageVector = Icons.Default.RotateRight,
+                contentDescription = "Girar Clipe",
+                tint = Color(0xFFFBBF24),
+                modifier = Modifier.padding(6.dp)
             )
+        }
+
+        // Alça Superior Direita: Fechar/Deselecionar
+        Surface(
+            shape = CircleShape,
+            color = Color(0xFF1E293B),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF87171)),
+            modifier = Modifier
+                .size(32.dp)
+                .align(Alignment.TopEnd)
+                .offset(x = 10.dp, y = (-10).dp)
+                .clickable {
+                    viewModel.selectClip(null)
+                }
+                .testTag("clip_close_handle_${clip.id}")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Deselecionar Clipe",
+                tint = Color.White,
+                modifier = Modifier.padding(6.dp)
+            )
+        }
+
+        // Alça Inferior Direita: Redimensionar / Escalar com Arraste
+        Surface(
+            shape = CircleShape,
+            color = Color(0xFF1E293B),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFBBF24)),
+            modifier = Modifier
+                .size(32.dp)
+                .align(Alignment.BottomEnd)
+                .offset(x = 10.dp, y = 10.dp)
+                .pointerInput(clip.id) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        val delta = (dragAmount.x + dragAmount.y) / 250f
+                        val newScale = (clip.scale + delta).coerceIn(0.2f, 4.0f)
+                        viewModel.updateClipTransform(scale = newScale, clipId = clip.id)
+                    }
+                }
+                .testTag("clip_scale_handle_${clip.id}")
+        ) {
+            Icon(
+                imageVector = Icons.Default.OpenInFull,
+                contentDescription = "Redimensionar Clipe",
+                tint = Color(0xFFFBBF24),
+                modifier = Modifier.padding(6.dp)
+            )
+        }
+
+        // Alça Inferior Esquerda: Redefinir Posição / Transformação
+        Surface(
+            shape = CircleShape,
+            color = Color(0xFF1E293B),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF94A3B8)),
+            modifier = Modifier
+                .size(32.dp)
+                .align(Alignment.BottomStart)
+                .offset(x = (-10).dp, y = 10.dp)
+                .clickable {
+                    viewModel.updateClipTransform(
+                        scale = 1.0f,
+                        rotation = 0f,
+                        positionX = 0f,
+                        positionY = 0f,
+                        clipId = clip.id
+                    )
+                }
+                .testTag("clip_reset_transform_${clip.id}")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = "Redefinir Transformação",
+                tint = Color.White,
+                modifier = Modifier.padding(6.dp)
+            )
+        }
+
+        // Indicador central durante arraste ou se transformado
+        if (isDragging || clip.scale != 1.0f || clip.rotation != 0f || clip.positionX != 0f || clip.positionY != 0f) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color.Black.copy(alpha = 0.8f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFBBF24)),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = 8.dp)
+            ) {
+                Text(
+                    text = "${(clip.scale * 100).toInt()}% • ${clip.rotation.toInt()}°",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
         }
     }
 }

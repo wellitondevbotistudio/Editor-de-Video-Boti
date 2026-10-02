@@ -20,7 +20,8 @@ data class ClipEffectState(
     val flipVertical: Boolean = false,
     val opacity: Float = 1.0f,     // 0.0f .. 1.0f (1.0f é opaco)
     val positionX: Float = 0f,     // deslocamento horizontal X
-    val positionY: Float = 0f      // deslocamento vertical Y
+    val positionY: Float = 0f,     // deslocamento vertical Y
+    val cropRatio: String = "Original" // Proporção de corte do elemento
 ) {
     val hasAdjustments: Boolean
         get() = brightness != 0f || contrast != 0f || saturation != 0f
@@ -29,7 +30,7 @@ data class ClipEffectState(
         get() = filter != "Original" && filter.isNotBlank()
 
     val hasTransform: Boolean
-        get() = scale != 1.0f || rotation != 0f || flipHorizontal || flipVertical || opacity != 1.0f || positionX != 0f || positionY != 0f
+        get() = scale != 1.0f || rotation != 0f || flipHorizontal || flipVertical || opacity != 1.0f || positionX != 0f || positionY != 0f || cropRatio != "Original"
 
     companion object {
         fun fromClip(clip: MediaClip?, activeVfx: List<VFXEffectItem> = emptyList()): ClipEffectState {
@@ -47,7 +48,8 @@ data class ClipEffectState(
                 flipVertical = clip.flipVertical,
                 opacity = clip.opacity.coerceIn(0f, 1f),
                 positionX = clip.positionX,
-                positionY = clip.positionY
+                positionY = clip.positionY,
+                cropRatio = clip.cropRatio
             )
         }
     }

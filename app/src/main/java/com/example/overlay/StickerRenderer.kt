@@ -4,11 +4,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -20,6 +23,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,7 +36,7 @@ import com.example.ui.theme.PrimaryPurpleVariant
 import java.io.File
 
 /**
- * Renderizador de Stickers e GIFs animados reais sobre o vídeo.
+ * Renderizador de Stickers e GIFs animados reais sobre o vídeo com manipulação direta.
  */
 @Composable
 fun StickerLayer(
@@ -41,12 +45,20 @@ fun StickerLayer(
     selectedStickerId: String?,
     onSelectSticker: (String?) -> Unit,
     onMoveSticker: (id: String, newPosX: Float, newPosY: Float) -> Unit,
+    onScaleSticker: ((id: String, newScale: Float) -> Unit)? = null,
+    onRotateSticker: ((id: String, newRotation: Float) -> Unit)? = null,
     onDeleteSticker: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
 
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val canvasWidth = maxWidth
+        val canvasHeight = maxHeight
+        val canvasWpx = with(density) { canvasWidth.toPx() }
+        val canvasHpx = with(density) { canvasHeight.toPx() }
+
         stickers.forEach { item ->
             if (item.isVisible) {
                 val animState = OverlayAnimationEngine.calculateStickerState(
@@ -70,13 +82,13 @@ fun StickerLayer(
                     }
                     val isFileMissing = model is File && !model.exists()
 
+                    val offsetX = ((item.posX - 0.5f) * canvasWidth.value).dp + animState.translationX.dp
+                    val offsetY = ((item.posY - 0.5f) * canvasHeight.value).dp + animState.translationY.dp
+
                     Box(
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .offset(
-                                x = ((item.posX - 0.5f) * 280f + animState.translationX).dp,
-                                y = ((item.posY - 0.5f) * 400f + animState.translationY).dp
-                            )
+                            .offset(x = offsetX, y = offsetY)
                             .size(100.dp)
                             .graphicsLayer {
                                 scaleX = animState.scale
@@ -85,14 +97,22 @@ fun StickerLayer(
                                 alpha = animState.alpha
                             }
                             .clickable { onSelectSticker(item.id) }
-                            .pointerInput(item.id) {
+                            .pointerInput(item.id, canvasWpx, canvasHpx) {
                                 detectDragGestures { change, dragAmount ->
                                     change.consume()
-                                    val deltaX = dragAmount.x / 280f
-                                    val deltaY = dragAmount.y / 400f
+                                    val deltaX = if (canvasWpx > 0f) dragAmount.x / canvasWpx else 0f
+                                    val deltaY = if (canvasHpx > 0f) dragAmount.y / canvasHpx else 0f
                                     val newX = (item.posX + deltaX).coerceIn(0.05f, 0.95f)
                                     val newY = (item.posY + deltaY).coerceIn(0.05f, 0.95f)
                                     onMoveSticker(item.id, newX, newY)
+                                }
+                            }
+                            .pointerInput(item.id) {
+                                detectTransformGestures { _, _, zoom, _ ->
+                                    if (zoom != 1.0f && onScaleSticker != null) {
+                                        val newScale = (item.scale * zoom).coerceIn(0.3f, 3.5f)
+                                        onScaleSticker(item.id, newScale)
+                                    }
                                 }
                             }
                             .then(
@@ -109,7 +129,6 @@ fun StickerLayer(
                             .testTag("sticker_overlay_${item.id}")
                     ) {
                         if (isFileMissing || model == null) {
-                            // Tolerância a arquivo ausente: não trava, mostra placeholder limpo
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = Color.DarkGray.copy(alpha = 0.7f),
@@ -146,13 +165,14 @@ fun StickerLayer(
                             )
                         }
 
-                        // Badge de exclusão rápida
+                        // Alças de controle quando selecionado
                         if (isSelected) {
+                            // 1. Excluir (Topo-Direita)
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color = PrimaryPurple,
                                 modifier = Modifier
-                                    .size(22.dp)
+                                    .size(24.dp)
                                     .align(Alignment.TopEnd)
                                     .offset(x = 6.dp, y = (-6).dp)
                                     .clickable { onDeleteSticker(item.id) }
@@ -161,7 +181,54 @@ fun StickerLayer(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Remover Sticker",
                                     tint = Color.White,
-                                    modifier = Modifier.padding(3.dp)
+                                    modifier = Modifier.padding(4.dp)
+                                )
+                            }
+
+                            // 2. Girar (Topo-Esquerda)
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF1E293B),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryPurpleVariant),
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .align(Alignment.TopStart)
+                                    .offset(x = (-6).dp, y = (-6).dp)
+                                    .clickable {
+                                        val newRot = (item.rotation + 45f) % 360f
+                                        onRotateSticker?.invoke(item.id, newRot)
+                                    }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.RotateRight,
+                                    contentDescription = "Girar Sticker",
+                                    tint = Color.White,
+                                    modifier = Modifier.padding(4.dp)
+                                )
+                            }
+
+                            // 3. Dimensionar (Base-Direita)
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = PrimaryPurpleVariant,
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .align(Alignment.BottomEnd)
+                                    .offset(x = 6.dp, y = 6.dp)
+                                    .pointerInput(item.id, canvasWpx) {
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            val delta = (dragAmount.x + dragAmount.y) / (canvasWpx * 0.4f).coerceAtLeast(100f)
+                                            val newScale = (item.scale + delta).coerceIn(0.3f, 3.5f)
+                                            onScaleSticker?.invoke(item.id, newScale)
+                                        }
+                                    }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.OpenInFull,
+                                    contentDescription = "Redimensionar Sticker",
+                                    tint = Color.White,
+                                    modifier = Modifier.padding(4.dp)
                                 )
                             }
                         }

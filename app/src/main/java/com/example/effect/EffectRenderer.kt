@@ -4,10 +4,13 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.RenderEffect
 import android.os.Build
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 
@@ -70,8 +73,33 @@ fun TransformedMediaContainer(
                 }
             }
     ) {
-        // Conteúdo da mídia (Video PlayerView ou AsyncImage para fotos)
-        content(composeColorMatrix)
+        // Recorte visual do elemento se cropRatio estiver ativo
+        val cropAspect = when (effectState.cropRatio) {
+            "1:1" -> 1f
+            "16:9" -> 16f / 9f
+            "9:16" -> 9f / 16f
+            "4:5" -> 4f / 5f
+            "4:3" -> 4f / 3f
+            else -> null
+        }
+
+        if (cropAspect != null) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .aspectRatio(cropAspect)
+                        .clipToBounds()
+                ) {
+                    content(composeColorMatrix)
+                }
+            }
+        } else {
+            // Conteúdo da mídia sem corte proporcional
+            content(composeColorMatrix)
+        }
 
         // Overlay dos efeitos VFX ativos
         if (effectState.activeVfx.isNotEmpty()) {
