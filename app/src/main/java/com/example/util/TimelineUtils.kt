@@ -364,11 +364,24 @@ object TimelineUtils {
 
     fun calculateTotalProjectDuration(
         clips: List<MediaClip>,
-        audios: List<com.example.model.AudioTrackItem>
+        audios: List<com.example.model.AudioTrackItem> = emptyList(),
+        texts: List<com.example.model.TextOverlayItem> = emptyList(),
+        stickers: List<com.example.model.StickerItem> = emptyList()
     ): Long {
         val videoDuration = calculateProjectTimelineDuration(clips)
         val maxAudioEnd = audios.maxOfOrNull { getAudioTimelineEndMs(it) } ?: 0L
-        return maxOf(videoDuration, maxAudioEnd).coerceAtLeast(0L)
+        val maxTextEnd = texts.maxOfOrNull { it.startTimeMs + it.durationMs } ?: 0L
+        val maxStickerEnd = stickers.maxOfOrNull { it.startTimeMs + it.durationMs } ?: 0L
+        return maxOf(videoDuration, maxAudioEnd, maxTextEnd, maxStickerEnd).coerceAtLeast(0L)
+    }
+
+    fun calculateTotalProjectDuration(project: com.example.model.ProjectItem): Long {
+        return calculateTotalProjectDuration(
+            clips = project.clips,
+            audios = project.audios,
+            texts = project.texts,
+            stickers = project.stickers
+        )
     }
 
     const val MIN_AUDIO_DURATION_MS = 200L

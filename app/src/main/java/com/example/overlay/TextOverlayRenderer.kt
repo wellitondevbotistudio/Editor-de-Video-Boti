@@ -6,9 +6,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.Icon
@@ -49,8 +51,12 @@ fun TextOverlayLayer(
     onScaleText: ((id: String, newScale: Float) -> Unit)? = null,
     onRotateText: ((id: String, newRotation: Float) -> Unit)? = null,
     onDeleteText: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isTextVisible: Boolean = true,
+    isTextLocked: Boolean = false
 ) {
+    if (!isTextVisible) return
+
     val density = LocalDensity.current
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -76,6 +82,7 @@ fun TextOverlayLayer(
 
                 if (animState.isVisible) {
                     val isSelected = item.id == selectedTextId
+                    val isLocked = isTextLocked || item.isLocked
                     val textColor = parseColorSafely(item.colorHex, Color.White)
                     val bgColor = item.bgHex?.let { parseColorSafely(it, Color.Transparent) }
                     val textAlign = when (item.alignment.lowercase()) {
@@ -87,6 +94,32 @@ fun TextOverlayLayer(
                     val offsetX = ((item.posX - 0.5f) * canvasWidth.value).dp + animState.translationX.dp
                     val offsetY = ((item.posY - 0.5f) * canvasHeight.value).dp + animState.translationY.dp
 
+                    val gestureModifier = if (isLocked) {
+                        Modifier.clickable { onSelectText(item.id) }
+                    } else {
+                        Modifier
+                            .clickable { onSelectText(item.id) }
+                            .pointerInput(item.id, canvasWpx, canvasHpx) {
+                                detectTransformGestures { _, pan, zoom, rotationChange ->
+                                    if (pan.x != 0f || pan.y != 0f) {
+                                        val deltaX = if (canvasWpx > 0f) pan.x / canvasWpx else 0f
+                                        val deltaY = if (canvasHpx > 0f) pan.y / canvasHpx else 0f
+                                        val newX = (item.posX + deltaX).coerceIn(0.05f, 0.95f)
+                                        val newY = (item.posY + deltaY).coerceIn(0.05f, 0.95f)
+                                        onMoveText(item.id, newX, newY)
+                                    }
+                                    if (zoom != 1.0f && onScaleText != null) {
+                                        val newScale = (item.scale * zoom).coerceIn(0.3f, 3.5f)
+                                        onScaleText(item.id, newScale)
+                                    }
+                                    if (rotationChange != 0f && onRotateText != null) {
+                                        val newRot = (item.rotation + rotationChange) % 360f
+                                        onRotateText(item.id, newRot)
+                                    }
+                                }
+                            }
+                    }
+
                     Box(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -97,31 +130,13 @@ fun TextOverlayLayer(
                                 rotationZ = item.rotation
                                 alpha = animState.alpha
                             }
-                            .clickable { onSelectText(item.id) }
-                            .pointerInput(item.id, canvasWpx, canvasHpx) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    val deltaX = if (canvasWpx > 0f) dragAmount.x / canvasWpx else 0f
-                                    val deltaY = if (canvasHpx > 0f) dragAmount.y / canvasHpx else 0f
-                                    val newX = (item.posX + deltaX).coerceIn(0.05f, 0.95f)
-                                    val newY = (item.posY + deltaY).coerceIn(0.05f, 0.95f)
-                                    onMoveText(item.id, newX, newY)
-                                }
-                            }
-                            .pointerInput(item.id) {
-                                detectTransformGestures { _, _, zoom, _ ->
-                                    if (zoom != 1.0f && onScaleText != null) {
-                                        val newScale = (item.scale * zoom).coerceIn(0.3f, 3.5f)
-                                        onScaleText(item.id, newScale)
-                                    }
-                                }
-                            }
+                            .then(gestureModifier)
                             .then(
                                 if (isSelected) {
                                     Modifier
                                         .border(
                                             width = 1.5.dp,
-                                            color = PrimaryPurpleVariant,
+                                            color = if (isLocked) Color(0xFFEAB308) else PrimaryPurpleVariant,
                                             shape = RoundedCornerShape(6.dp)
                                         )
                                         .padding(4.dp)
@@ -159,7 +174,25 @@ fun TextOverlayLayer(
                         }
 
                         // Alças de controle quando selecionado
-                        if (isSelected) {
+                        if (isSelected && isLocked) {
+                            // Indicador de Camada Bloqueada
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFF1E293B),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEAB308)),
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .align(Alignment.TopCenter)
+                                    .offset(y = (-11).dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Texto Bloqueado",
+                                    tint = Color(0xFFEAB308),
+                                    modifier = Modifier.padding(3.dp)
+                                )
+                            }
+                        } else if (isSelected) {
                             // 1. Excluir (Topo-Direita)
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
@@ -209,12 +242,22 @@ fun TextOverlayLayer(
                                     .align(Alignment.BottomEnd)
                                     .offset(x = 6.dp, y = 6.dp)
                                     .pointerInput(item.id, canvasWpx) {
-                                        detectDragGestures { change, dragAmount ->
-                                            change.consume()
-                                            val delta = (dragAmount.x + dragAmount.y) / (canvasWpx * 0.4f).coerceAtLeast(100f)
-                                            val newScale = (item.scale + delta).coerceIn(0.3f, 3.5f)
-                                            onScaleText?.invoke(item.id, newScale)
-                                        }
+                                        var initialScale = item.scale
+                                        var accumulatedDelta = 0f
+                                        val referencePx = (canvasWpx * 0.45f).coerceAtLeast(150f)
+                                        detectDragGestures(
+                                            onDragStart = {
+                                                initialScale = item.scale
+                                                accumulatedDelta = 0f
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                accumulatedDelta += (dragAmount.x + dragAmount.y)
+                                                val factor = 1f + (accumulatedDelta / referencePx)
+                                                val newScale = (initialScale * factor).coerceIn(0.3f, 3.5f)
+                                                onScaleText?.invoke(item.id, newScale)
+                                            }
+                                        )
                                     }
                             ) {
                                 Icon(

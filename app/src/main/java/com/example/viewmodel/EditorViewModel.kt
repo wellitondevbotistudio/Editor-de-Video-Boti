@@ -34,6 +34,7 @@ enum class ToolPanel {
     CANVAS,
     LAYERS,
     TRANSFORM,
+    CROP,
     FILES
 }
 
@@ -120,9 +121,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     }
 
                     if (updatedCurrent != null) {
-                        playerManager.setClipsAndAudios(updatedCurrent.clips, updatedCurrent.audios, initialSeekPlayhead = state.currentPositionMs)
+                        playerManager.setClipsAndAudios(
+                            updatedCurrent.clips,
+                            updatedCurrent.audios,
+                            updatedCurrent.texts,
+                            updatedCurrent.stickers,
+                            initialSeekPlayhead = state.currentPositionMs
+                        )
                     } else {
-                        playerManager.setClipsAndAudios(emptyList(), emptyList())
+                        playerManager.setClipsAndAudios(emptyList(), emptyList(), emptyList(), emptyList())
                     }
 
                     state.copy(
@@ -187,7 +194,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun applyRestoredProject(project: ProjectItem) {
-        val total = TimelineUtils.calculateTotalProjectDuration(project.clips, project.audios)
+        val total = TimelineUtils.calculateTotalProjectDuration(project.clips, project.audios, project.texts, project.stickers)
         val clampedPlayhead = _uiState.value.currentPositionMs.coerceIn(0L, total.coerceAtLeast(0L))
         val selectedId = if (project.clips.any { it.id == _uiState.value.selectedClipId }) {
             _uiState.value.selectedClipId
@@ -195,7 +202,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             null
         }
 
-        playerManager.setClipsAndAudios(project.clips, project.audios, initialSeekPlayhead = clampedPlayhead)
+        playerManager.setClipsAndAudios(
+            project.clips,
+            project.audios,
+            project.texts,
+            project.stickers,
+            initialSeekPlayhead = clampedPlayhead
+        )
+        playerManager.exoPlayer.volume = if (project.isVideoMuted) 0f else 1f
+        playerManager.audioSyncManager.isMasterMuted = project.isAudioMuted
 
         _uiState.update { state ->
             val updatedProjects = state.projects.map { if (it.id == project.id) project else it }
@@ -224,7 +239,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun getTotalDurationMs(): Long {
         val proj = _uiState.value.currentProject ?: return 0L
-        return TimelineUtils.calculateTotalProjectDuration(proj.clips, proj.audios)
+        return TimelineUtils.calculateTotalProjectDuration(proj.clips, proj.audios, proj.texts, proj.stickers)
     }
 
     fun togglePlayback() {
@@ -312,7 +327,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         redoStack.clear()
         updateHistoryUiFlags()
 
-        playerManager.setClipsAndAudios(project.clips, project.audios, initialSeekPlayhead = 0L)
+        playerManager.setClipsAndAudios(
+            project.clips,
+            project.audios,
+            project.texts,
+            project.stickers,
+            initialSeekPlayhead = 0L
+        )
+        playerManager.exoPlayer.volume = if (project.isVideoMuted) 0f else 1f
+        playerManager.audioSyncManager.isMasterMuted = project.isAudioMuted
 
         _uiState.update {
             it.copy(
@@ -609,7 +632,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val newClipStartTimeline = TimelineUtils.getClipStartTimelineMs(updatedClips, clipIndex)
         val newClipDuration = TimelineUtils.calculateClipTimelineDuration(trimmed)
         val newClipEndTimeline = newClipStartTimeline + newClipDuration
-        val newTotal = TimelineUtils.calculateProjectTimelineDuration(updatedClips)
+        val newTotal = TimelineUtils.calculateTotalProjectDuration(updatedClips, cur.audios, cur.texts, cur.stickers)
 
         val currentPos = _uiState.value.currentPositionMs
 
@@ -709,7 +732,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val clipEnd = clipStart + clipDuration
 
         val updatedClips = TimelineUtils.removeClip(cur.clips, index)
-        val newTotal = TimelineUtils.calculateProjectTimelineDuration(updatedClips)
+        val newTotal = TimelineUtils.calculateTotalProjectDuration(updatedClips, cur.audios, cur.texts, cur.stickers)
         val currentPos = _uiState.value.currentPositionMs
 
         // Calculate new playhead position
@@ -758,24 +781,41 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         deleteClip(null)
     }
 
-    fun updateClipSpeed(speed: Float) {
+    fun updateClipSpeed(speed: Float, clipId: String? = null) {
         val cur = _uiState.value.currentProject ?: return
-        val selId = _uiState.value.selectedClipId ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: cur.clips.firstOrNull()?.id ?: return
         val updatedClips = cur.clips.map { clip ->
-            if (clip.id == selId) {
+            if (clip.id == targetId) {
                 val updatedClip = clip.copy(speed = speed)
                 val newDuration = TimelineUtils.calculateClipTimelineDuration(updatedClip)
                 updatedClip.copy(durationMs = newDuration)
             } else clip
         }
         commitProjectChange(cur.copy(clips = updatedClips))
+        if (playerManager.playbackState.value.currentClipId == targetId) {
+            playerManager.exoPlayer.setPlaybackParameters(androidx.media3.common.PlaybackParameters(speed))
+        }
+        setFeedback("Velocidade ajustada: ${speed}x")
     }
 
-    fun updateClipFilter(filter: String) {
+    fun updateClipVolume(volume: Float, clipId: String? = null) {
         val cur = _uiState.value.currentProject ?: return
-        val selId = _uiState.value.selectedClipId ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: cur.clips.firstOrNull()?.id ?: return
         val updatedClips = cur.clips.map {
-            if (it.id == selId) it.copy(filter = filter) else it
+            if (it.id == targetId) it.copy(volume = volume.coerceIn(0f, 1f)) else it
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        if (playerManager.playbackState.value.currentClipId == targetId && !cur.isVideoMuted) {
+            playerManager.exoPlayer.volume = volume.coerceIn(0f, 1f)
+        }
+        setFeedback("Volume do clipe: ${(volume * 100).toInt()}%")
+    }
+
+    fun updateClipFilter(filter: String, clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: cur.clips.firstOrNull()?.id ?: return
+        val updatedClips = cur.clips.map {
+            if (it.id == targetId) it.copy(filter = filter) else it
         }
         commitProjectChange(cur.copy(clips = updatedClips, activeFilter = filter))
         setFeedback("Filtro '$filter' aplicado")
@@ -791,17 +831,100 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         setFeedback("Filtro removido")
     }
 
-    fun updateClipAdjustments(brightness: Float, contrast: Float, saturation: Float) {
+    fun updateClipAdjustments(brightness: Float, contrast: Float, saturation: Float, clipId: String? = null) {
         val cur = _uiState.value.currentProject ?: return
-        val selId = _uiState.value.selectedClipId ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: cur.clips.firstOrNull()?.id ?: return
         val updatedClips = cur.clips.map {
-            if (it.id == selId) it.copy(
+            if (it.id == targetId) it.copy(
                 brightness = brightness.coerceIn(-100f, 100f),
                 contrast = contrast.coerceIn(-100f, 100f),
                 saturation = saturation.coerceIn(-100f, 100f)
             ) else it
         }
         commitProjectChange(cur.copy(clips = updatedClips))
+    }
+
+    // ---------------- CONTROLES DE CAMADAS / FAIXAS ----------------
+
+    fun toggleVideoVisibility() {
+        val cur = _uiState.value.currentProject ?: return
+        val newVis = !cur.isVideoVisible
+        commitProjectChange(cur.copy(isVideoVisible = newVis))
+        setFeedback(if (newVis) "Faixa de vídeo visível" else "Faixa de vídeo oculta")
+    }
+
+    fun toggleVideoMute() {
+        val cur = _uiState.value.currentProject ?: return
+        val newMute = !cur.isVideoMuted
+        val updated = cur.copy(isVideoMuted = newMute)
+        playerManager.setLayerMuteState(newMute, cur.isAudioMuted)
+        commitProjectChange(updated)
+        setFeedback(if (newMute) "Faixa de vídeo mutada" else "Som da faixa de vídeo ativado")
+    }
+
+    fun toggleVideoLock() {
+        val cur = _uiState.value.currentProject ?: return
+        val newLock = !cur.isVideoLocked
+        commitProjectChange(cur.copy(isVideoLocked = newLock))
+        setFeedback(if (newLock) "Faixa de vídeo bloqueada" else "Faixa de vídeo desbloqueada")
+    }
+
+    fun toggleAudioMute() {
+        val cur = _uiState.value.currentProject ?: return
+        val newMute = !cur.isAudioMuted
+        val updated = cur.copy(isAudioMuted = newMute)
+        playerManager.setLayerMuteState(cur.isVideoMuted, newMute)
+        commitProjectChange(updated)
+        setFeedback(if (newMute) "Faixa de áudio mutada" else "Som da faixa de áudio ativado")
+    }
+
+    fun toggleAudioLock() {
+        val cur = _uiState.value.currentProject ?: return
+        val newLock = !cur.isAudioLocked
+        commitProjectChange(cur.copy(isAudioLocked = newLock))
+        setFeedback(if (newLock) "Faixa de áudio bloqueada" else "Faixa de áudio desbloqueada")
+    }
+
+    fun toggleTextVisibility() {
+        val cur = _uiState.value.currentProject ?: return
+        val newVis = !cur.isTextVisible
+        commitProjectChange(cur.copy(isTextVisible = newVis))
+        setFeedback(if (newVis) "Faixa de texto visível" else "Faixa de texto oculta")
+    }
+
+    fun toggleTextLock() {
+        val cur = _uiState.value.currentProject ?: return
+        val newLock = !cur.isTextLocked
+        commitProjectChange(cur.copy(isTextLocked = newLock))
+        setFeedback(if (newLock) "Faixa de texto bloqueada" else "Faixa de texto desbloqueada")
+    }
+
+    fun toggleVfxVisibility() {
+        val cur = _uiState.value.currentProject ?: return
+        val newVis = !cur.isVfxVisible
+        commitProjectChange(cur.copy(isVfxVisible = newVis))
+        setFeedback(if (newVis) "Faixa de efeitos visível" else "Faixa de efeitos oculta")
+    }
+
+    fun toggleVfxLock() {
+        val cur = _uiState.value.currentProject ?: return
+        val newLock = !cur.isVfxLocked
+        commitProjectChange(cur.copy(isVfxLocked = newLock))
+        setFeedback(if (newLock) "Faixa de efeitos bloqueada" else "Faixa de efeitos desbloqueada")
+    }
+
+    fun toggleOverlayVisibility() {
+        val cur = _uiState.value.currentProject ?: return
+        val newVis = !cur.isOverlayVisible
+        commitProjectChange(cur.copy(isOverlayVisible = newVis))
+        setFeedback(if (newVis) "Faixa de sobreposição visível" else "Faixa de sobreposição oculta")
+    }
+
+    fun toggleOverlayLock() {
+        val cur = _uiState.value.currentProject ?: return
+        val newLock = !cur.isOverlayLocked
+        commitProjectChange(cur.copy(isOverlayLocked = newLock))
+        setFeedback(if (newLock) "Faixa de sobreposição bloqueada" else "Faixa de sobreposição desbloqueada")
     }
 
     fun resetClipAdjustments(clipId: String? = null) {
@@ -1347,7 +1470,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             }
             state.copy(currentProject = project, projects = updatedProjects)
         }
-        playerManager.setClipsAndAudios(project.clips, project.audios)
+        playerManager.setClipsAndAudios(
+            project.clips,
+            project.audios,
+            project.texts,
+            project.stickers
+        )
+        playerManager.setLayerMuteState(project.isVideoMuted, project.isAudioMuted)
         loadWaveformsForProject(project)
         viewModelScope.launch {
             repository.saveProject(project)

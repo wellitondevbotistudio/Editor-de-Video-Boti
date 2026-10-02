@@ -14,7 +14,7 @@ import com.example.data.repository.ProjectRepository
 class BotiApplication : Application(), ImageLoaderFactory {
 
     val database: AppDatabase by lazy { AppDatabase.getInstance(this) }
-    val projectRepository: ProjectRepository by lazy { ProjectRepository(database) }
+    val projectRepository: ProjectRepository by lazy { ProjectRepository(database, this) }
     val mediaStorageManager: MediaStorageManager by lazy { MediaStorageManager(this) }
     val mediaMetadataExtractor: MediaMetadataExtractor by lazy { MediaMetadataExtractor(this) }
 

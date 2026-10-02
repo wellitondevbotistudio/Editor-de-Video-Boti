@@ -38,6 +38,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -128,7 +129,7 @@ fun EditorScreen(
         return
     }
 
-    val totalDurationMs = viewModel.getTotalDurationMs()
+    val totalDurationMs = remember(project) { com.example.util.TimelineUtils.calculateTotalProjectDuration(project) }
     val clipAtPlayhead = com.example.util.TimelineUtils.findClipAtTimelinePosition(project.clips, uiState.currentPositionMs)?.clip
     val currentClip = project.clips.find { it.id == uiState.selectedClipId } ?: clipAtPlayhead ?: project.clips.firstOrNull()
 
@@ -465,119 +466,6 @@ fun EditorScreen(
                         .weight(0.45f)
                         .background(BackgroundDark)
                 ) {
-                    // Barra de Controles de Reprodução
-                    val displayPosition = if (isScrubbing) scrubPositionMs.toLong() else uiState.currentPositionMs
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(BackgroundDark)
-                            .padding(horizontal = 14.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        // Indicador de Tempo
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = SurfaceDark,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
-                        ) {
-                            Text(
-                                text = "${formatTime(displayPosition)} / ${formatTime(totalDurationMs)}",
-                                color = TextSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-
-                        // Botão Play / Pause Central
-                        Surface(
-                            onClick = { viewModel.togglePlayback() },
-                            shape = CircleShape,
-                            color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (uiState.isPlaying) BorderSubtle else PrimaryPurpleLight
-                            ),
-                            modifier = Modifier
-                                .size(38.dp)
-                                .shadow(if (uiState.isPlaying) 0.dp else 8.dp, CircleShape, spotColor = PrimaryPurple)
-                                .testTag("btn_play_pause")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                        }
-
-                        // Ações da Direita: Dividir, Desfazer, Refazer, Tela Cheia
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            IconButton(
-                                onClick = { viewModel.splitClipAtPlayhead() },
-                                enabled = currentClip != null,
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CallSplit,
-                                    contentDescription = "Dividir",
-                                    tint = if (currentClip != null) PrimaryPurpleLight else TextTertiary.copy(alpha = 0.35f),
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { viewModel.undo() },
-                                enabled = uiState.canUndo,
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .testTag("editor_undo_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Undo,
-                                    contentDescription = "Desfazer",
-                                    tint = if (uiState.canUndo) Color.White else TextTertiary.copy(alpha = 0.35f),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { viewModel.redo() },
-                                enabled = uiState.canRedo,
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .testTag("editor_redo_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Redo,
-                                    contentDescription = "Refazer",
-                                    tint = if (uiState.canRedo) Color.White else TextTertiary.copy(alpha = 0.35f),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { isFullscreen = true },
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .testTag("fullscreen_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Fullscreen,
-                                    contentDescription = "Tela Cheia",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-
                     // Linha do tempo multi-camadas CapCut adaptável
                     CapCutMultiTrackTimeline(
                         project = project,
@@ -651,6 +539,17 @@ fun EditorScreen(
                         },
                         onAddOverlay = { viewModel.setActivePanel(ToolPanel.STICKER) },
                         onClearSelection = { viewModel.clearAllSelections() },
+                        onToggleTextLock = { viewModel.toggleTextLock() },
+                        onToggleTextVisibility = { viewModel.toggleTextVisibility() },
+                        onToggleVfxLock = { viewModel.toggleVfxLock() },
+                        onToggleVfxVisibility = { viewModel.toggleVfxVisibility() },
+                        onToggleVideoLock = { viewModel.toggleVideoLock() },
+                        onToggleVideoVisibility = { viewModel.toggleVideoVisibility() },
+                        onToggleVideoMute = { viewModel.toggleVideoMute() },
+                        onToggleOverlayLock = { viewModel.toggleOverlayLock() },
+                        onToggleOverlayVisibility = { viewModel.toggleOverlayVisibility() },
+                        onToggleAudioLock = { viewModel.toggleAudioLock() },
+                        onToggleAudioMute = { viewModel.toggleAudioMute() },
                         modifier = Modifier.weight(1f)
                     )
 
@@ -743,7 +642,7 @@ fun EditorScreen(
                                     Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateClip() },
                                     Triple("Inverter", Icons.Default.Refresh) { viewModel.setFeedback("Efeito reverso aplicado ao clipe.") },
                                     Triple("Congelar", Icons.Default.AcUnit) { viewModel.setFeedback("Quadro congelado criado na linha do tempo.") },
-                                    Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CANVAS) },
+                                    Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CROP) },
                                     Triple("Substituir", Icons.Default.SwapHoriz) { onNavigateToImport() },
                                     Triple("Opacidade", Icons.Default.Opacity) { viewModel.setActivePanel(ToolPanel.TRANSFORM) }
                                 )
@@ -816,6 +715,7 @@ fun EditorScreen(
                                     ToolPanel.TRIM -> "Cortar & Ajustar"
                                     ToolPanel.FILES -> "Arquivos de Mídia"
                                     ToolPanel.CAPTIONS -> "Legendas Automáticas"
+                                    ToolPanel.CROP -> "Recortar Clipe"
                                     else -> "Ferramenta"
                                 }
 
@@ -876,7 +776,127 @@ fun EditorScreen(
                                             androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                                         )
                                     })
+                                    ToolPanel.CROP -> ClipCropPanel(currentClip, viewModel)
                                     else -> {}
+                                }
+                            }
+                        }
+                    }
+
+                    // Controles padrão do app (Play/Pause, timecode, split, undo, redo, fullscreen)
+                    val displayPosition = if (isScrubbing) scrubPositionMs.toLong() else uiState.currentPositionMs
+                    Surface(
+                        color = Color(0xFF13131A),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Indicador de Tempo
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = SurfaceDark,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+                            ) {
+                                Text(
+                                    text = "${formatTime(displayPosition)} / ${formatTime(totalDurationMs)}",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+
+                            // Botão Play / Pause Central
+                            Surface(
+                                onClick = { viewModel.togglePlayback() },
+                                shape = CircleShape,
+                                color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (uiState.isPlaying) BorderSubtle else PrimaryPurpleLight
+                                ),
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .shadow(if (uiState.isPlaying) 0.dp else 8.dp, CircleShape, spotColor = PrimaryPurple)
+                                    .testTag("btn_play_pause")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+
+                            // Ações da Direita: Dividir, Desfazer, Refazer, Tela Cheia
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                IconButton(
+                                    onClick = { viewModel.splitClipAtPlayhead() },
+                                    enabled = currentClip != null,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CallSplit,
+                                        contentDescription = "Dividir",
+                                        tint = if (currentClip != null) PrimaryPurpleLight else TextTertiary.copy(alpha = 0.35f),
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.undo() },
+                                    enabled = uiState.canUndo,
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("editor_undo_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Undo,
+                                        contentDescription = "Desfazer",
+                                        tint = if (uiState.canUndo) Color.White else TextTertiary.copy(alpha = 0.35f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.redo() },
+                                    enabled = uiState.canRedo,
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("editor_redo_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Redo,
+                                        contentDescription = "Refazer",
+                                        tint = if (uiState.canRedo) Color.White else TextTertiary.copy(alpha = 0.35f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { isFullscreen = true },
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("fullscreen_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Fullscreen,
+                                        contentDescription = "Tela Cheia",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
                             }
                         }
@@ -921,6 +941,8 @@ private fun VideoPreviewContent(
                 isPhotoActive = playbackState.isPhotoActive,
                 activePhotoPath = playbackState.activePhotoPath,
                 exoPlayer = viewModel.playerManager.exoPlayer,
+                isVideoVisible = project.isVideoVisible,
+                isVfxVisible = project.isVfxVisible,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -967,6 +989,8 @@ private fun VideoPreviewContent(
             onScaleSticker = { id, scale -> viewModel.updateStickerScale(id, scale) },
             onRotateSticker = { id, rot -> viewModel.updateStickerRotation(id, rot) },
             onDeleteSticker = { viewModel.removeSticker(it) },
+            isOverlayVisible = project.isOverlayVisible,
+            isOverlayLocked = project.isOverlayLocked,
             modifier = Modifier.fillMaxSize()
         )
 
@@ -983,11 +1007,13 @@ private fun VideoPreviewContent(
             onScaleText = { id, scale -> viewModel.updateTextOverlayScale(id, scale) },
             onRotateText = { id, rot -> viewModel.updateTextOverlayRotation(id, rot) },
             onDeleteText = { viewModel.removeTextOverlay(it) },
+            isTextVisible = project.isTextVisible,
+            isTextLocked = project.isTextLocked,
             modifier = Modifier.fillMaxSize()
         )
 
-        // Direct Preview Manipulation Overlay for Selected Video/Photo Clip
-        if (isClipSelected && currentClip != null) {
+        // Direct Preview Manipulation Overlay for Selected Video/Photo Clip (respeita lock e visibilidade da camada)
+        if (isClipSelected && currentClip != null && !project.isVideoLocked && project.isVideoVisible) {
             ClipDirectManipulationOverlay(
                 clip = currentClip,
                 viewModel = viewModel,
@@ -1088,10 +1114,9 @@ private fun ClipDirectManipulationOverlay(
             }
             .pointerInput(clip.id) {
                 detectTransformGestures { _, pan, zoom, rotationChange ->
-                    var newScale = clip.scale
-                    if (zoom != 1.0f) {
-                        newScale = (clip.scale * zoom).coerceIn(0.2f, 4.0f)
-                    }
+                    val newScale = if (zoom != 1.0f) {
+                        (clip.scale * zoom).coerceIn(0.2f, 5.0f)
+                    } else clip.scale
                     val newRotation = if (rotationChange != 0f) {
                         (clip.rotation + rotationChange) % 360f
                     } else clip.rotation
@@ -1108,30 +1133,17 @@ private fun ClipDirectManipulationOverlay(
                     )
                 }
             }
-            .pointerInput(clip.id, isDragging) {
-                detectDragGestures(
-                    onDragStart = { isDragging = true },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        val newX = clip.positionX + dragAmount.x
-                        val newY = clip.positionY + dragAmount.y
-                        viewModel.updateClipTransform(
-                            positionX = newX,
-                            positionY = newY,
-                            clipId = clip.id
-                        )
-                    },
-                    onDragEnd = { isDragging = false },
-                    onDragCancel = { isDragging = false }
-                )
-            }
             .border(
                 width = 2.dp,
-                color = if (isDragging) Color(0xFFFBBF24) else Color(0xFFFBBF24).copy(alpha = 0.85f),
+                color = Color(0xFFFBBF24).copy(alpha = 0.85f),
                 shape = RoundedCornerShape(4.dp)
             )
             .testTag("clip_manipulation_overlay_${clip.id}")
     ) {
+        val invScale = 1f / clip.scale.coerceIn(0.2f, 5.0f)
+        val flipH = if (clip.flipHorizontal) -1f else 1f
+        val flipV = if (clip.flipVertical) -1f else 1f
+
         // Alça Superior Esquerda: Girar 45°
         Surface(
             shape = CircleShape,
@@ -1141,6 +1153,10 @@ private fun ClipDirectManipulationOverlay(
                 .size(32.dp)
                 .align(Alignment.TopStart)
                 .offset(x = (-10).dp, y = (-10).dp)
+                .graphicsLayer {
+                    scaleX = invScale * flipH
+                    scaleY = invScale * flipV
+                }
                 .clickable {
                     val nextRot = (clip.rotation + 45f) % 360f
                     viewModel.updateClipTransform(rotation = nextRot, clipId = clip.id)
@@ -1164,6 +1180,10 @@ private fun ClipDirectManipulationOverlay(
                 .size(32.dp)
                 .align(Alignment.TopEnd)
                 .offset(x = 10.dp, y = (-10).dp)
+                .graphicsLayer {
+                    scaleX = invScale * flipH
+                    scaleY = invScale * flipV
+                }
                 .clickable {
                     viewModel.selectClip(null)
                 }
@@ -1178,6 +1198,8 @@ private fun ClipDirectManipulationOverlay(
         }
 
         // Alça Inferior Direita: Redimensionar / Escalar com Arraste
+        val density = LocalDensity.current
+        val scaleRefPx = with(density) { 180.dp.toPx() }
         Surface(
             shape = CircleShape,
             color = Color(0xFF1E293B),
@@ -1186,13 +1208,26 @@ private fun ClipDirectManipulationOverlay(
                 .size(32.dp)
                 .align(Alignment.BottomEnd)
                 .offset(x = 10.dp, y = 10.dp)
+                .graphicsLayer {
+                    scaleX = invScale * flipH
+                    scaleY = invScale * flipV
+                }
                 .pointerInput(clip.id) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        val delta = (dragAmount.x + dragAmount.y) / 250f
-                        val newScale = (clip.scale + delta).coerceIn(0.2f, 4.0f)
-                        viewModel.updateClipTransform(scale = newScale, clipId = clip.id)
-                    }
+                    var initialScale = clip.scale
+                    var accumulatedDelta = 0f
+                    detectDragGestures(
+                        onDragStart = {
+                            initialScale = clip.scale
+                            accumulatedDelta = 0f
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            accumulatedDelta += (dragAmount.x + dragAmount.y)
+                            val factor = 1f + (accumulatedDelta / scaleRefPx)
+                            val newScale = (initialScale * factor).coerceIn(0.2f, 5.0f)
+                            viewModel.updateClipTransform(scale = newScale, clipId = clip.id)
+                        }
+                    )
                 }
                 .testTag("clip_scale_handle_${clip.id}")
         ) {
@@ -1213,6 +1248,10 @@ private fun ClipDirectManipulationOverlay(
                 .size(32.dp)
                 .align(Alignment.BottomStart)
                 .offset(x = (-10).dp, y = 10.dp)
+                .graphicsLayer {
+                    scaleX = invScale * flipH
+                    scaleY = invScale * flipV
+                }
                 .clickable {
                     viewModel.updateClipTransform(
                         scale = 1.0f,
@@ -3229,4 +3268,62 @@ private fun TrimPanel(clip: MediaClip?, viewModel: EditorViewModel) {
         )
     }
 }
+
+@Composable
+private fun ClipCropPanel(clip: MediaClip?, viewModel: EditorViewModel) {
+    if (clip == null) {
+        Text("Selecione um clipe na timeline para recortar.", color = TextSecondary, fontSize = 13.sp)
+        return
+    }
+
+    val cropRatios = listOf(
+        "Original" to "Original",
+        "1:1" to "1:1",
+        "9:16" to "9:16",
+        "16:9" to "16:9",
+        "4:5" to "4:5",
+        "4:3" to "4:3"
+    )
+    val currentRatio = clip.cropRatio.ifBlank { "Original" }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Proporção de Recorte do Clipe", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(
+                text = currentRatio,
+                color = PrimaryPurpleVariant,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Text("Ajusta o enquadramento visual do clipe selecionado", color = TextTertiary, fontSize = 11.sp)
+        Spacer(modifier = Modifier.height(10.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(cropRatios) { (label, ratio) ->
+                val isSel = currentRatio == ratio
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isSel) PrimaryPurple else SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurpleVariant else BorderStrong),
+                    modifier = Modifier
+                        .clickable { viewModel.updateClipCropRatio(ratio, clip.id) }
+                        .testTag("crop_ratio_$label")
+                ) {
+                    Text(
+                        text = label,
+                        color = if (isSel) Color.White else TextPrimary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        fontSize = 12.sp,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+    }
+}
+
 

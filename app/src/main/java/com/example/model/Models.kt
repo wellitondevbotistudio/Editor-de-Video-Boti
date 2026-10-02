@@ -45,7 +45,10 @@ data class MediaClip(
     val positionX: Float = 0f,
     val positionY: Float = 0f,
     val isReverse: Boolean = false,
-    val isFrozen: Boolean = false
+    val isFrozen: Boolean = false,
+    val isVisible: Boolean = true,
+    val isMuted: Boolean = false,
+    val isLocked: Boolean = false
 )
 
 data class AudioTrackItem(
@@ -61,6 +64,7 @@ data class AudioTrackItem(
     val fileSizeBytes: Long = 0L,
     val volume: Float = 0.8f,
     val isMuted: Boolean = false,
+    val isLocked: Boolean = false,
     val timelineStartMs: Long = 0L,
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = 0L,
@@ -93,7 +97,8 @@ data class TextOverlayItem(
     val animationDurationMs: Long = 500L,
     val textAnimationMode: String = "Full", // Full, Word, Letter
     val styleTemplateId: String? = null,
-    val isVisible: Boolean = true
+    val isVisible: Boolean = true,
+    val isLocked: Boolean = false
 )
 
 data class StickerItem(
@@ -112,7 +117,8 @@ data class StickerItem(
     val animationIn: String = "Fade",
     val animationOut: String = "Fade",
     val animationDurationMs: Long = 500L,
-    val isVisible: Boolean = true
+    val isVisible: Boolean = true,
+    val isLocked: Boolean = false
 )
 
 data class SubtitleSegmentItem(
@@ -180,7 +186,19 @@ data class ProjectItem(
     val subtitleStyle: SubtitleStyleConfig = SubtitleStyleConfig(),
     val activeFilter: String = "Original",
     val activeVFX: List<VFXEffectItem> = emptyList(),
-    val transitions: List<TransitionItem> = emptyList()
+    val transitions: List<TransitionItem> = emptyList(),
+    // Controles de Camadas / Faixas
+    val isTextVisible: Boolean = true,
+    val isTextLocked: Boolean = false,
+    val isVfxVisible: Boolean = true,
+    val isVfxLocked: Boolean = false,
+    val isVideoVisible: Boolean = true,
+    val isVideoMuted: Boolean = false,
+    val isVideoLocked: Boolean = false,
+    val isOverlayVisible: Boolean = true,
+    val isOverlayLocked: Boolean = false,
+    val isAudioMuted: Boolean = false,
+    val isAudioLocked: Boolean = false
 )
 
 data class ExportOptions(

@@ -14,8 +14,16 @@ class AudioSyncManager(private val context: Context) {
 
     private val trackPlayers = mutableMapOf<String, ExoPlayer>()
     private var activeTracks: List<AudioTrackItem> = emptyList()
-
     var onAudioTrackError: ((String, String) -> Unit)? = null
+
+    var isMasterMuted: Boolean = false
+        set(value) {
+            field = value
+            trackPlayers.forEach { (id, player) ->
+                val track = activeTracks.find { it.id == id }
+                player.volume = if (value || track?.isMuted == true) 0f else (track?.volume?.coerceIn(0f, 1f) ?: 0.8f)
+            }
+        }
 
     fun setTracks(tracks: List<AudioTrackItem>) {
         activeTracks = tracks
@@ -32,14 +40,14 @@ class AudioSyncManager(private val context: Context) {
         // Pre-configure existing players with updated volume/mute
         tracks.forEach { track ->
             trackPlayers[track.id]?.let { player ->
-                val targetVolume = if (track.isMuted) 0f else track.volume.coerceIn(0f, 1f)
+                val targetVolume = if (isMasterMuted || track.isMuted) 0f else track.volume.coerceIn(0f, 1f)
                 player.volume = targetVolume
             }
         }
     }
 
     fun updateTrackVolumeAndMute(trackId: String, volume: Float, isMuted: Boolean) {
-        val targetVolume = if (isMuted) 0f else volume.coerceIn(0f, 1f)
+        val targetVolume = if (isMasterMuted || isMuted) 0f else volume.coerceIn(0f, 1f)
         trackPlayers[trackId]?.volume = targetVolume
     }
 
@@ -63,7 +71,7 @@ class AudioSyncManager(private val context: Context) {
 
             if (isActive && desiredSourceMs != null) {
                 val player = getOrCreatePlayer(track, file)
-                val targetVolume = if (track.isMuted) 0f else track.volume.coerceIn(0f, 1f)
+                val targetVolume = if (isMasterMuted || track.isMuted) 0f else track.volume.coerceIn(0f, 1f)
                 player.volume = targetVolume
 
                 // Check sync drift between audio player and master playhead
@@ -113,7 +121,7 @@ class AudioSyncManager(private val context: Context) {
 
             if (isActive && desiredSourceMs != null) {
                 val player = getOrCreatePlayer(track, file)
-                val targetVolume = if (track.isMuted) 0f else track.volume.coerceIn(0f, 1f)
+                val targetVolume = if (isMasterMuted || track.isMuted) 0f else track.volume.coerceIn(0f, 1f)
                 player.volume = targetVolume
                 player.seekTo(desiredSourceMs)
 

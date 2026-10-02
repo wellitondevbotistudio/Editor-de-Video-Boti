@@ -33,14 +33,22 @@ fun TransitionAwareMediaSurface(
     isPhotoActive: Boolean,
     activePhotoPath: String?,
     exoPlayer: androidx.media3.exoplayer.ExoPlayer,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isVideoVisible: Boolean = true,
+    isVfxVisible: Boolean = true
 ) {
+    if (!isVideoVisible) {
+        Box(modifier = modifier.fillMaxSize().background(Color.Black))
+        return
+    }
+
+    val effectiveVFX = if (isVfxVisible) activeVFX else emptyList()
     val activeTransition = TransitionEngine.findActiveTransition(clips, currentPlayheadMs)
 
     Box(modifier = modifier.fillMaxSize().clipToBounds()) {
         if (activeTransition != null) {
             // Renderiza Clip A com transformação da transição
-            val effectStateA = ClipEffectState.fromClip(activeTransition.clipA, activeVFX)
+            val effectStateA = ClipEffectState.fromClip(activeTransition.clipA, effectiveVFX)
             val transformA = activeTransition.transformA
 
             Box(
@@ -63,7 +71,7 @@ fun TransitionAwareMediaSurface(
             }
 
             // Renderiza Clip B com transformação da transição
-            val effectStateB = ClipEffectState.fromClip(activeTransition.clipB, activeVFX)
+            val effectStateB = ClipEffectState.fromClip(activeTransition.clipB, effectiveVFX)
             val transformB = activeTransition.transformB
 
             Box(
@@ -86,7 +94,7 @@ fun TransitionAwareMediaSurface(
             }
         } else if (activeClip != null) {
             // Renderização padrão sem transição
-            val effectState = ClipEffectState.fromClip(activeClip, activeVFX)
+            val effectState = ClipEffectState.fromClip(activeClip, effectiveVFX)
             TransformedMediaContainer(
                 effectState = effectState,
                 modifier = Modifier.fillMaxSize()

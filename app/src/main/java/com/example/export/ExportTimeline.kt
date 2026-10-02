@@ -46,10 +46,7 @@ class ExportTimeline(
     val project: ProjectItem,
     val config: VideoExportConfig
 ) {
-    val totalDurationMs: Long = TimelineUtils.calculateTotalProjectDuration(
-        clips = project.clips,
-        audios = project.audios
-    ).coerceAtLeast(100L)
+    val totalDurationMs: Long = TimelineUtils.calculateTotalProjectDuration(project).coerceAtLeast(100L)
 
     val totalFrames: Long = ((totalDurationMs.toDouble() / 1000.0) * config.fps).toLong().coerceAtLeast(1L)
 
@@ -66,54 +63,64 @@ class ExportTimeline(
     fun evaluateAt(timeMs: Long): ExportFrameSnapshot {
         val clampedTime = timeMs.coerceIn(0L, totalDurationMs)
 
-        // 1. Transição ativa entre clips
-        val activeTransition = TransitionEngine.findActiveTransition(project.clips, clampedTime)
+        // 1. Transição ativa entre clips (apenas se faixa de vídeo estiver visível)
+        val activeTransition = if (project.isVideoVisible) {
+            TransitionEngine.findActiveTransition(project.clips, clampedTime)
+        } else null
 
-        // 2. Clipe principal ativo caso não haja transição ou como fallback
-        val activeClipInfo = TimelineUtils.findClipAtTimelinePosition(project.clips, clampedTime)
+        // 2. Clipe principal ativo (apenas se faixa de vídeo estiver visível)
+        val activeClipInfo = if (project.isVideoVisible) {
+            TimelineUtils.findClipAtTimelinePosition(project.clips, clampedTime)
+        } else null
 
-        // 3. Efeitos VFX globais ou associados
-        val activeVfx = project.activeVFX.filter { it.isEnabled }
+        // 3. Efeitos VFX globais ou associados (apenas se faixa de VFX estiver visível)
+        val activeVfx = if (project.isVfxVisible) {
+            project.activeVFX.filter { it.isEnabled }
+        } else emptyList()
 
         // 4. Overlays de texto com cálculo de animação temporal determinística
-        val activeTexts = project.texts
-            .filter { it.isVisible }
-            .mapNotNull { textItem ->
-                val state = OverlayAnimationEngine.calculateTextState(
-                    playheadMs = clampedTime,
-                    startTimeMs = textItem.startTimeMs,
-                    durationMs = textItem.durationMs,
-                    baseScale = textItem.scale,
-                    baseOpacity = textItem.opacity,
-                    fullText = textItem.text,
-                    animationIn = textItem.animationIn,
-                    animationOut = textItem.animationOut,
-                    animationDurationMs = textItem.animationDurationMs,
-                    textAnimationMode = textItem.textAnimationMode
-                )
-                if (state.isVisible) {
-                    EvaluatedTextOverlay(item = textItem, animState = state)
-                } else null
-            }
+        val activeTexts = if (project.isTextVisible) {
+            project.texts
+                .filter { it.isVisible }
+                .mapNotNull { textItem ->
+                    val state = OverlayAnimationEngine.calculateTextState(
+                        playheadMs = clampedTime,
+                        startTimeMs = textItem.startTimeMs,
+                        durationMs = textItem.durationMs,
+                        baseScale = textItem.scale,
+                        baseOpacity = textItem.opacity,
+                        fullText = textItem.text,
+                        animationIn = textItem.animationIn,
+                        animationOut = textItem.animationOut,
+                        animationDurationMs = textItem.animationDurationMs,
+                        textAnimationMode = textItem.textAnimationMode
+                    )
+                    if (state.isVisible) {
+                        EvaluatedTextOverlay(item = textItem, animState = state)
+                    } else null
+                }
+        } else emptyList()
 
         // 5. Stickers e GIFs com animação temporal
-        val activeStickers = project.stickers
-            .filter { it.isVisible }
-            .mapNotNull { stickerItem ->
-                val state = OverlayAnimationEngine.calculateStickerState(
-                    playheadMs = clampedTime,
-                    startTimeMs = stickerItem.startTimeMs,
-                    durationMs = stickerItem.durationMs,
-                    baseScale = stickerItem.scale,
-                    baseOpacity = stickerItem.opacity,
-                    animationIn = stickerItem.animationIn,
-                    animationOut = stickerItem.animationOut,
-                    animationDurationMs = stickerItem.animationDurationMs
-                )
-                if (state.isVisible) {
-                    EvaluatedSticker(item = stickerItem, animState = state)
-                } else null
-            }
+        val activeStickers = if (project.isOverlayVisible) {
+            project.stickers
+                .filter { it.isVisible }
+                .mapNotNull { stickerItem ->
+                    val state = OverlayAnimationEngine.calculateStickerState(
+                        playheadMs = clampedTime,
+                        startTimeMs = stickerItem.startTimeMs,
+                        durationMs = stickerItem.durationMs,
+                        baseScale = stickerItem.scale,
+                        baseOpacity = stickerItem.opacity,
+                        animationIn = stickerItem.animationIn,
+                        animationOut = stickerItem.animationOut,
+                        animationDurationMs = stickerItem.animationDurationMs
+                    )
+                    if (state.isVisible) {
+                        EvaluatedSticker(item = stickerItem, animState = state)
+                    } else null
+                }
+        } else emptyList()
 
         // 6. Subtítulos/Legendas ativas
         val activeSubtitles = project.subtitles.filter { sub ->

@@ -10,7 +10,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-class ProjectRepository(private val database: AppDatabase) {
+class ProjectRepository(
+    private val database: AppDatabase,
+    private val context: android.content.Context? = null
+) {
 
     private val projectDao = database.projectDao()
     private val clipDao = database.clipDao()
@@ -21,18 +24,56 @@ class ProjectRepository(private val database: AppDatabase) {
     private val vfxDao = database.vfxDao()
     private val transitionDao = database.transitionDao()
 
+    private val prefs by lazy {
+        context?.getSharedPreferences("boti_project_layer_settings", android.content.Context.MODE_PRIVATE)
+    }
+
+    private fun saveLayerSettings(project: ProjectItem) {
+        prefs?.edit()?.apply {
+            putBoolean("${project.id}_text_vis", project.isTextVisible)
+            putBoolean("${project.id}_text_lock", project.isTextLocked)
+            putBoolean("${project.id}_vfx_vis", project.isVfxVisible)
+            putBoolean("${project.id}_vfx_lock", project.isVfxLocked)
+            putBoolean("${project.id}_video_vis", project.isVideoVisible)
+            putBoolean("${project.id}_video_mute", project.isVideoMuted)
+            putBoolean("${project.id}_video_lock", project.isVideoLocked)
+            putBoolean("${project.id}_overlay_vis", project.isOverlayVisible)
+            putBoolean("${project.id}_overlay_lock", project.isOverlayLocked)
+            putBoolean("${project.id}_audio_mute", project.isAudioMuted)
+            putBoolean("${project.id}_audio_lock", project.isAudioLocked)
+            apply()
+        }
+    }
+
+    private fun applyLayerSettings(project: ProjectItem): ProjectItem {
+        val p = prefs ?: return project
+        return project.copy(
+            isTextVisible = p.getBoolean("${project.id}_text_vis", project.isTextVisible),
+            isTextLocked = p.getBoolean("${project.id}_text_lock", project.isTextLocked),
+            isVfxVisible = p.getBoolean("${project.id}_vfx_vis", project.isVfxVisible),
+            isVfxLocked = p.getBoolean("${project.id}_vfx_lock", project.isVfxLocked),
+            isVideoVisible = p.getBoolean("${project.id}_video_vis", project.isVideoVisible),
+            isVideoMuted = p.getBoolean("${project.id}_video_mute", project.isVideoMuted),
+            isVideoLocked = p.getBoolean("${project.id}_video_lock", project.isVideoLocked),
+            isOverlayVisible = p.getBoolean("${project.id}_overlay_vis", project.isOverlayVisible),
+            isOverlayLocked = p.getBoolean("${project.id}_overlay_lock", project.isOverlayLocked),
+            isAudioMuted = p.getBoolean("${project.id}_audio_mute", project.isAudioMuted),
+            isAudioLocked = p.getBoolean("${project.id}_audio_lock", project.isAudioLocked)
+        )
+    }
+
     fun getAllProjects(): Flow<List<ProjectItem>> {
         return projectDao.getAllProjectsWithDetails().map { list ->
-            list.map { it.toDomain() }
+            list.map { applyLayerSettings(it.toDomain()) }
         }
     }
 
     fun getProjectById(id: String): Flow<ProjectItem?> {
-        return projectDao.getProjectWithDetailsById(id).map { it?.toDomain() }
+        return projectDao.getProjectWithDetailsById(id).map { it?.let { applyLayerSettings(it.toDomain()) } }
     }
 
     suspend fun getProjectByIdOnce(id: String): ProjectItem? = withContext(Dispatchers.IO) {
-        projectDao.getProjectWithDetailsByIdOnce(id)?.toDomain()
+        projectDao.getProjectWithDetailsByIdOnce(id)?.toDomain()?.let { applyLayerSettings(it) }
     }
 
     suspend fun seedInitialDataIfNeeded() = withContext(Dispatchers.IO) {
@@ -108,6 +149,7 @@ class ProjectRepository(private val database: AppDatabase) {
                 transitionDao.insertTransitions(transitionEntities)
             }
         }
+        saveLayerSettings(project)
     }
 
     suspend fun renameProject(id: String, newTitle: String) = withContext(Dispatchers.IO) {

@@ -99,24 +99,35 @@ fun CapCutMultiTrackTimeline(
     onReorderClip: ((fromIndex: Int, toIndex: Int) -> Unit)? = null,
     onAddOverlay: (() -> Unit)? = null,
     onClearSelection: (() -> Unit)? = null,
+    onToggleTextLock: (() -> Unit)? = null,
+    onToggleTextVisibility: (() -> Unit)? = null,
+    onToggleVfxLock: (() -> Unit)? = null,
+    onToggleVfxVisibility: (() -> Unit)? = null,
+    onToggleVideoLock: (() -> Unit)? = null,
+    onToggleVideoVisibility: (() -> Unit)? = null,
+    onToggleVideoMute: (() -> Unit)? = null,
+    onToggleOverlayLock: (() -> Unit)? = null,
+    onToggleOverlayVisibility: (() -> Unit)? = null,
+    onToggleAudioLock: (() -> Unit)? = null,
+    onToggleAudioMute: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var zoomScale by remember { mutableFloatStateOf(1.0f) } // 0.6x to 3.5x
     val horizontalScrollState = rememberScrollState()
     val verticalScrollState = rememberScrollState()
 
-    // Track states: Lock, Mute, Visibility
-    var isTextLocked by remember { mutableStateOf(false) }
-    var isTextVisible by remember { mutableStateOf(true) }
-    var isVfxLocked by remember { mutableStateOf(false) }
-    var isVfxVisible by remember { mutableStateOf(true) }
-    var isVideoLocked by remember { mutableStateOf(false) }
-    var isVideoMuted by remember { mutableStateOf(false) }
-    var isVideoVisible by remember { mutableStateOf(true) }
-    var isOverlayLocked by remember { mutableStateOf(false) }
-    var isOverlayVisible by remember { mutableStateOf(true) }
-    var isAudioLocked by remember { mutableStateOf(false) }
-    var isAudioMuted by remember { mutableStateOf(false) }
+    // Real Track states from project model
+    val isTextLocked = project.isTextLocked
+    val isTextVisible = project.isTextVisible
+    val isVfxLocked = project.isVfxLocked
+    val isVfxVisible = project.isVfxVisible
+    val isVideoLocked = project.isVideoLocked
+    val isVideoMuted = project.isVideoMuted
+    val isVideoVisible = project.isVideoVisible
+    val isOverlayLocked = project.isOverlayLocked
+    val isOverlayVisible = project.isOverlayVisible
+    val isAudioLocked = project.isAudioLocked
+    val isAudioMuted = project.isAudioMuted
 
     // Calculated timeline width based on duration & zoom
     val safeTotalMs = max(totalDurationMs, 5000L)
@@ -380,8 +391,8 @@ fun CapCutMultiTrackTimeline(
                     height = 36.dp,
                     isLocked = isTextLocked,
                     isVisible = isTextVisible,
-                    onToggleLock = { isTextLocked = !isTextLocked },
-                    onToggleVisibility = { isTextVisible = !isTextVisible },
+                    onToggleLock = { onToggleTextLock?.invoke() },
+                    onToggleVisibility = { onToggleTextVisibility?.invoke() },
                     onAdd = onAddText
                 )
 
@@ -393,8 +404,8 @@ fun CapCutMultiTrackTimeline(
                     height = 36.dp,
                     isLocked = isVfxLocked,
                     isVisible = isVfxVisible,
-                    onToggleLock = { isVfxLocked = !isVfxLocked },
-                    onToggleVisibility = { isVfxVisible = !isVfxVisible },
+                    onToggleLock = { onToggleVfxLock?.invoke() },
+                    onToggleVisibility = { onToggleVfxVisibility?.invoke() },
                     onAdd = onAddEffect
                 )
 
@@ -408,9 +419,9 @@ fun CapCutMultiTrackTimeline(
                     isVisible = isVideoVisible,
                     isMuted = isVideoMuted,
                     showMute = true,
-                    onToggleLock = { isVideoLocked = !isVideoLocked },
-                    onToggleVisibility = { isVideoVisible = !isVideoVisible },
-                    onToggleMute = { isVideoMuted = !isVideoMuted },
+                    onToggleLock = { onToggleVideoLock?.invoke() },
+                    onToggleVisibility = { onToggleVideoVisibility?.invoke() },
+                    onToggleMute = { onToggleVideoMute?.invoke() },
                     onAdd = onAddMedia
                 )
 
@@ -422,8 +433,8 @@ fun CapCutMultiTrackTimeline(
                     height = 36.dp,
                     isLocked = isOverlayLocked,
                     isVisible = isOverlayVisible,
-                    onToggleLock = { isOverlayLocked = !isOverlayLocked },
-                    onToggleVisibility = { isOverlayVisible = !isOverlayVisible },
+                    onToggleLock = { onToggleOverlayLock?.invoke() },
+                    onToggleVisibility = { onToggleOverlayVisibility?.invoke() },
                     onAdd = { onAddOverlay?.invoke() ?: onAddMedia() }
                 )
 
@@ -437,9 +448,9 @@ fun CapCutMultiTrackTimeline(
                     isVisible = true,
                     isMuted = isAudioMuted,
                     showMute = true,
-                    onToggleLock = { isAudioLocked = !isAudioLocked },
+                    onToggleLock = { onToggleAudioLock?.invoke() },
                     onToggleVisibility = {},
-                    onToggleMute = { isAudioMuted = !isAudioMuted },
+                    onToggleMute = { onToggleAudioMute?.invoke() },
                     onAdd = onAddAudio
                 )
             }
@@ -489,20 +500,24 @@ fun CapCutMultiTrackTimeline(
                                     .padding(start = startDp)
                                     .width(widthDp)
                                     .fillMaxHeight()
-                                    .pointerInput(textItem.id, dpPerSecond) {
-                                        detectDragGestures(
-                                            onDragStart = { onSelectText(textItem.id) },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                                if (pxPerSec > 0) {
-                                                    val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                    val newStart = (textItem.startTimeMs + deltaMs).coerceIn(0L, safeTotalMs - 200L)
-                                                    onMoveText?.invoke(textItem.id, newStart)
-                                                }
+                                    .then(
+                                        if (!isTextLocked) {
+                                            Modifier.pointerInput(textItem.id, dpPerSecond) {
+                                                detectDragGestures(
+                                                    onDragStart = { onSelectText(textItem.id) },
+                                                    onDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                                        if (pxPerSec > 0) {
+                                                            val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
+                                                            val newStart = (textItem.startTimeMs + deltaMs).coerceIn(0L, safeTotalMs - 200L)
+                                                            onMoveText?.invoke(textItem.id, newStart)
+                                                        }
+                                                    }
+                                                )
                                             }
-                                        )
-                                    }
+                                        } else Modifier
+                                    )
                                     .clickable { onSelectText(textItem.id) }
                                     .testTag("track_text_${textItem.id}")
                             ) {
@@ -677,35 +692,39 @@ fun CapCutMultiTrackTimeline(
                                             }
                                             .zIndex(if (isBeingDragged) 10f else 1f)
                                             .shadow(if (isBeingDragged) 10.dp else 0.dp, RoundedCornerShape(8.dp))
-                                            .pointerInput(clip.id, clipWidthDp) {
-                                                detectDragGestures(
-                                                    onDragStart = {
-                                                        dragClipId = clip.id
-                                                        dragOffsetPx = 0f
-                                                        onSelectClip(clip.id)
-                                                    },
-                                                    onDrag = { change, dragAmount ->
-                                                        change.consume()
-                                                        dragOffsetPx += dragAmount.x
-                                                    },
-                                                    onDragEnd = {
-                                                        val clipWpx = with(density) { clipWidthDp.toPx() }
-                                                        if (clipWpx > 0 && Math.abs(dragOffsetPx) > clipWpx * 0.4f) {
-                                                            val shift = if (dragOffsetPx > 0) 1 else -1
-                                                            val targetIdx = (index + shift).coerceIn(0, project.clips.lastIndex)
-                                                            if (targetIdx != index) {
-                                                                onReorderClip?.invoke(index, targetIdx)
+                                            .then(
+                                                if (!isVideoLocked) {
+                                                    Modifier.pointerInput(clip.id, clipWidthDp) {
+                                                        detectDragGestures(
+                                                            onDragStart = {
+                                                                dragClipId = clip.id
+                                                                dragOffsetPx = 0f
+                                                                onSelectClip(clip.id)
+                                                            },
+                                                            onDrag = { change, dragAmount ->
+                                                                change.consume()
+                                                                dragOffsetPx += dragAmount.x
+                                                            },
+                                                            onDragEnd = {
+                                                                val clipWpx = with(density) { clipWidthDp.toPx() }
+                                                                if (clipWpx > 0 && Math.abs(dragOffsetPx) > clipWpx * 0.4f) {
+                                                                    val shift = if (dragOffsetPx > 0) 1 else -1
+                                                                    val targetIdx = (index + shift).coerceIn(0, project.clips.lastIndex)
+                                                                    if (targetIdx != index) {
+                                                                        onReorderClip?.invoke(index, targetIdx)
+                                                                    }
+                                                                }
+                                                                dragClipId = null
+                                                                dragOffsetPx = 0f
+                                                            },
+                                                            onDragCancel = {
+                                                                dragClipId = null
+                                                                dragOffsetPx = 0f
                                                             }
-                                                        }
-                                                        dragClipId = null
-                                                        dragOffsetPx = 0f
-                                                    },
-                                                    onDragCancel = {
-                                                        dragClipId = null
-                                                        dragOffsetPx = 0f
+                                                        )
                                                     }
-                                                )
-                                            }
+                                                } else Modifier
+                                            )
                                             .clickable { onSelectClip(clip.id) }
                                             .testTag("track_clip_${clip.id}")
                                     ) {
@@ -834,20 +853,24 @@ fun CapCutMultiTrackTimeline(
                                     .padding(start = startDp)
                                     .width(widthDp)
                                     .fillMaxHeight()
-                                    .pointerInput(stk.id, dpPerSecond) {
-                                        detectDragGestures(
-                                            onDragStart = { onSelectSticker(stk.id) },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                                if (pxPerSec > 0) {
-                                                    val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                    val newStart = (stk.startTimeMs + deltaMs).coerceIn(0L, safeTotalMs - 200L)
-                                                    onMoveSticker?.invoke(stk.id, newStart)
-                                                }
+                                    .then(
+                                        if (!isOverlayLocked) {
+                                            Modifier.pointerInput(stk.id, dpPerSecond) {
+                                                detectDragGestures(
+                                                    onDragStart = { onSelectSticker(stk.id) },
+                                                    onDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                                        if (pxPerSec > 0) {
+                                                            val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
+                                                            val newStart = (stk.startTimeMs + deltaMs).coerceIn(0L, safeTotalMs - 200L)
+                                                            onMoveSticker?.invoke(stk.id, newStart)
+                                                        }
+                                                    }
+                                                )
                                             }
-                                        )
-                                    }
+                                        } else Modifier
+                                    )
                                     .clickable { onSelectSticker(stk.id) }
                                     .testTag("track_sticker_${stk.id}")
                             ) {
@@ -935,20 +958,24 @@ fun CapCutMultiTrackTimeline(
                                         .padding(start = startDp)
                                         .width(widthDp)
                                         .fillMaxHeight()
-                                        .pointerInput(audio.id, dpPerSecond) {
-                                            detectDragGestures(
-                                                onDragStart = { onSelectAudio(audio.id) },
-                                                onDrag = { change, dragAmount ->
-                                                    change.consume()
-                                                    val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                                    if (pxPerSec > 0) {
-                                                        val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                        val newStart = (audio.timelineStartMs + deltaMs).coerceIn(0L, safeTotalMs - 500L)
-                                                        onMoveAudio?.invoke(audio.id, newStart)
-                                                    }
+                                        .then(
+                                            if (!isAudioLocked) {
+                                                Modifier.pointerInput(audio.id, dpPerSecond) {
+                                                    detectDragGestures(
+                                                        onDragStart = { onSelectAudio(audio.id) },
+                                                        onDrag = { change, dragAmount ->
+                                                            change.consume()
+                                                            val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                                            if (pxPerSec > 0) {
+                                                                val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
+                                                                val newStart = (audio.timelineStartMs + deltaMs).coerceIn(0L, safeTotalMs - 500L)
+                                                                onMoveAudio?.invoke(audio.id, newStart)
+                                                            }
+                                                        }
+                                                    )
                                                 }
-                                            )
-                                        }
+                                            } else Modifier
+                                        )
                                         .clickable { onSelectAudio(audio.id) }
                                         .testTag("track_audio_${audio.id}")
                                 ) {

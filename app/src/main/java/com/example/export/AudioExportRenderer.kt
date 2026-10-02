@@ -189,34 +189,38 @@ class AudioExportRenderer(
         val mixAccumulatorR = IntArray(samplesCount)
 
         // 1. Áudio das faixas externas
-        project.audios.forEach { track ->
-            if (!track.isMuted && track.volume > 0f) {
-                if (TimelineUtils.isAudioActiveAtTimelinePosition(track, timelineTimeMs)) {
-                    hasAudioSource = true
-                    val volume = track.volume.coerceIn(0f, 1f)
-                    applySyntheticToneOrSilence(
-                        timelineTimeMs = timelineTimeMs,
-                        samplesCount = samplesCount,
-                        volume = volume * 0.4f,
-                        accL = mixAccumulatorL,
-                        accR = mixAccumulatorR
-                    )
+        if (!project.isAudioMuted) {
+            project.audios.forEach { track ->
+                if (!track.isMuted && track.volume > 0f) {
+                    if (TimelineUtils.isAudioActiveAtTimelinePosition(track, timelineTimeMs)) {
+                        hasAudioSource = true
+                        val volume = track.volume.coerceIn(0f, 1f)
+                        applySyntheticToneOrSilence(
+                            timelineTimeMs = timelineTimeMs,
+                            samplesCount = samplesCount,
+                            volume = volume * 0.4f,
+                            accL = mixAccumulatorL,
+                            accR = mixAccumulatorR
+                        )
+                    }
                 }
             }
         }
 
         // 2. Áudio embutido dos clipes de vídeo
-        val activeClipInfo = TimelineUtils.findClipAtTimelinePosition(project.clips, timelineTimeMs)
-        if (activeClipInfo != null && activeClipInfo.clip.type == MediaType.VIDEO && activeClipInfo.clip.volume > 0f) {
-            hasAudioSource = true
-            val volume = activeClipInfo.clip.volume.coerceIn(0f, 1f)
-            applySyntheticToneOrSilence(
-                timelineTimeMs = timelineTimeMs,
-                samplesCount = samplesCount,
-                volume = volume * 0.4f,
-                accL = mixAccumulatorL,
-                accR = mixAccumulatorR
-            )
+        if (!project.isVideoMuted) {
+            val activeClipInfo = TimelineUtils.findClipAtTimelinePosition(project.clips, timelineTimeMs)
+            if (activeClipInfo != null && activeClipInfo.clip.type == MediaType.VIDEO && !activeClipInfo.clip.isMuted && activeClipInfo.clip.volume > 0f) {
+                hasAudioSource = true
+                val volume = activeClipInfo.clip.volume.coerceIn(0f, 1f)
+                applySyntheticToneOrSilence(
+                    timelineTimeMs = timelineTimeMs,
+                    samplesCount = samplesCount,
+                    volume = volume * 0.4f,
+                    accL = mixAccumulatorL,
+                    accR = mixAccumulatorR
+                )
+            }
         }
 
         // Converte acumulador para 16-bit com clipping limiter

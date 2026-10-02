@@ -53,10 +53,15 @@ class EditorPlayerManager(
 
     private var activeClips: List<MediaClip> = emptyList()
     private var activeAudios: List<AudioTrackItem> = emptyList()
+    private var activeTexts: List<com.example.model.TextOverlayItem> = emptyList()
+    private var activeStickers: List<com.example.model.StickerItem> = emptyList()
 
     private var trackingJob: Job? = null
     private var hardwareSeekJob: Job? = null
     private var lastPhotoTickTime: Long = 0L
+    private var lastMasterTickTime: Long = 0L
+    @Volatile
+    private var isInterClipSwitching: Boolean = false
 
     // Token / geração de seek para invalidar respostas assíncronas defasadas
     private val seekGeneration = AtomicLong(0L)
@@ -65,6 +70,8 @@ class EditorPlayerManager(
 
     // ID do clipe atualmente carregado no ExoPlayer
     private var loadedClipId: String? = null
+    private var loadedMediaPath: String? = null
+    var isVideoMuted: Boolean = false
 
     var onTimelinePositionChanged: ((Long) -> Unit)? = null
 
@@ -108,7 +115,13 @@ class EditorPlayerManager(
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (!isCurrentClipPhoto() && activeClips.isNotEmpty()) {
-                    _playbackState.update { it.copy(isPlaying = isPlaying) }
+                    // Não pausa a reprodução mestre se o player estiver apenas bufferizando entre cortes
+                    if (!isPlaying && exoPlayer.playWhenReady) {
+                        return
+                    }
+                    if (!isInterClipSwitching) {
+                        _playbackState.update { it.copy(isPlaying = isPlaying) }
+                    }
                 }
             }
         })
@@ -117,18 +130,23 @@ class EditorPlayerManager(
     fun setClipsAndAudios(
         clips: List<MediaClip>,
         audios: List<AudioTrackItem>,
+        texts: List<com.example.model.TextOverlayItem> = emptyList(),
+        stickers: List<com.example.model.StickerItem> = emptyList(),
         initialSeekPlayhead: Long? = null
     ) {
-        val totalDuration = TimelineUtils.calculateTotalProjectDuration(clips, audios)
+        val totalDuration = TimelineUtils.calculateTotalProjectDuration(clips, audios, texts, stickers)
         activeClips = clips
         activeAudios = audios
+        activeTexts = texts
+        activeStickers = stickers
         audioSyncManager.setTracks(audios)
         _playbackState.update { it.copy(totalDurationMs = totalDuration) }
 
-        if (clips.isEmpty() && audios.isEmpty()) {
+        if (clips.isEmpty() && audios.isEmpty() && texts.isEmpty() && stickers.isEmpty()) {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
             loadedClipId = null
+            loadedMediaPath = null
             audioSyncManager.pauseAll()
             _playbackState.update {
                 it.copy(
@@ -147,30 +165,29 @@ class EditorPlayerManager(
         seekTo(targetPlayhead.coerceIn(0L, totalDuration))
     }
 
+    fun setLayerMuteState(isVideoMuted: Boolean, isAudioMuted: Boolean) {
+        this.isVideoMuted = isVideoMuted
+        audioSyncManager.isMasterMuted = isAudioMuted
+        if (isVideoMuted) {
+            exoPlayer.volume = 0f
+        } else {
+            val currentClip = activeClips.getOrNull(_playbackState.value.currentClipIndex)
+            exoPlayer.volume = if (currentClip?.isMuted == true) 0f else (currentClip?.volume?.coerceIn(0f, 1f) ?: 1f)
+        }
+    }
+
     fun setClips(clips: List<MediaClip>, initialSeekPlayhead: Long? = null) {
-        setClipsAndAudios(clips, activeAudios, initialSeekPlayhead)
+        setClipsAndAudios(clips, activeAudios, activeTexts, activeStickers, initialSeekPlayhead)
     }
 
     fun setAudios(audios: List<AudioTrackItem>) {
-        setClipsAndAudios(activeClips, audios, _playbackState.value.currentPositionMs)
+        setClipsAndAudios(activeClips, audios, activeTexts, activeStickers, _playbackState.value.currentPositionMs)
     }
 
-    /**
-     * Inicia a reprodução de forma previsível e determinística:
-     * 1. Lê currentTimeMs global
-     * 2. Identifica o clipe correspondente
-     * 3. Calcula a posição interna do clipe
-     * 4. Posiciona o player corretamente
-     * 5. Inicia reprodução
-     * 6. Atualiza currentTimeMs continuamente
-     * 7. Detecta troca de clipe
-     * 8. Continua automaticamente
-     * 9. Para exatamente no final da timeline
-     */
     fun play() {
-        if (activeClips.isEmpty() && activeAudios.isEmpty()) return
+        if (activeClips.isEmpty() && activeAudios.isEmpty() && activeTexts.isEmpty() && activeStickers.isEmpty()) return
 
-        val totalDuration = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios)
+        val totalDuration = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios, activeTexts, activeStickers)
         val currentPos = _playbackState.value.currentPositionMs
 
         // Se estiver no final da timeline, reinicia do início
@@ -179,6 +196,9 @@ class EditorPlayerManager(
         } else {
             currentPos
         }
+
+        lastMasterTickTime = System.currentTimeMillis()
+        isInterClipSwitching = false
 
         // 1. Atualiza estado para tocando e tempo inicial efetivo
         _playbackState.update {
@@ -247,8 +267,12 @@ class EditorPlayerManager(
      * Executa seek para uma posição absoluta na timeline.
      * Utiliza seekGeneration para invalidar callbacks antigos e coalescer seeks rápidos de scrubbing.
      */
+    fun getTotalDuration(): Long {
+        return TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios, activeTexts, activeStickers)
+    }
+
     fun seekTo(timelinePositionMs: Long) {
-        val totalDuration = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios)
+        val totalDuration = getTotalDuration()
         val clampedPlayhead = timelinePositionMs.coerceIn(0L, totalDuration.coerceAtLeast(0L))
         val currentGen = seekGeneration.incrementAndGet()
 
@@ -322,7 +346,7 @@ class EditorPlayerManager(
     }
 
     fun forward(stepMs: Long = 5000L) {
-        val total = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios)
+        val total = getTotalDuration()
         val target = (_playbackState.value.currentPositionMs + stepMs).coerceAtMost(total)
         seekTo(target)
     }
@@ -366,7 +390,7 @@ class EditorPlayerManager(
             val nextStart = TimelineUtils.getClipStartTimelineMs(activeClips, nextIndex)
             seekTo(nextStart)
         } else {
-            val total = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios)
+            val total = getTotalDuration()
             seekTo(total)
         }
     }
@@ -391,9 +415,12 @@ class EditorPlayerManager(
         }
 
         try {
-            val isDifferentClip = loadedClipId != clip.id || exoPlayer.mediaItemCount == 0
+            val mediaPath = if (file.exists()) file.absolutePath else clip.uri
+            val isDifferentSource = loadedMediaPath != mediaPath || exoPlayer.mediaItemCount == 0
 
-            if (isDifferentClip) {
+            if (isDifferentSource) {
+                isInterClipSwitching = true
+                lastMasterTickTime = System.currentTimeMillis()
                 val mediaItem = if (file.exists()) {
                     MediaItem.fromUri(Uri.fromFile(file))
                 } else {
@@ -402,19 +429,25 @@ class EditorPlayerManager(
                 exoPlayer.setMediaItem(mediaItem)
                 exoPlayer.prepare()
                 loadedClipId = clip.id
+                loadedMediaPath = mediaPath
+            } else {
+                loadedClipId = clip.id
             }
 
             val safeSpeed = TimelineUtils.getSafeSpeed(clip)
             exoPlayer.setPlaybackParameters(PlaybackParameters(safeSpeed))
 
-            val volume = clip.volume.coerceIn(0f, 1f)
-            exoPlayer.volume = volume
+            val targetVolume = if (isVideoMuted || clip.isMuted) 0f else clip.volume.coerceIn(0f, 1f)
+            exoPlayer.volume = targetVolume
 
             val clampedSourcePosition = sourcePositionMs.coerceIn(
                 TimelineUtils.getEffectiveTrimStart(clip),
                 TimelineUtils.getEffectiveTrimEnd(clip)
             )
-            exoPlayer.seekTo(clampedSourcePosition)
+            val currentExoPos = exoPlayer.currentPosition
+            if (isDifferentSource || kotlin.math.abs(currentExoPos - clampedSourcePosition) > 200L) {
+                exoPlayer.seekTo(clampedSourcePosition)
+            }
 
             if (_playbackState.value.isPlaying) {
                 exoPlayer.play()
@@ -436,10 +469,10 @@ class EditorPlayerManager(
         if (nextIndex != null) {
             loadNextClip(nextIndex)
         } else {
-            val totalDuration = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios)
+            val totalDuration = getTotalDuration()
             val currentPos = _playbackState.value.currentPositionMs
 
-            // Se houver faixas de áudio estendendo além do último clipe de vídeo, continue tocando
+            // Se houver faixas de áudio ou outros elementos estendendo além do último clipe de vídeo, continue tocando
             if (currentPos < totalDuration) {
                 _playbackState.update {
                     it.copy(
@@ -464,6 +497,12 @@ class EditorPlayerManager(
         val nextClip = activeClips[nextIndex]
         val nextStartTimeline = TimelineUtils.getClipStartTimelineMs(activeClips, nextIndex)
 
+        val path = nextClip.localPath.ifBlank { nextClip.uri }
+        val file = File(path)
+        val mediaPath = if (file.exists()) file.absolutePath else nextClip.uri
+        val isDifferentSource = loadedMediaPath != mediaPath
+        val trimStart = TimelineUtils.getEffectiveTrimStart(nextClip)
+
         _playbackState.update {
             it.copy(
                 currentClipId = nextClip.id,
@@ -482,12 +521,28 @@ class EditorPlayerManager(
                 )
             }
             lastPhotoTickTime = System.currentTimeMillis()
+            isInterClipSwitching = false
         } else {
             _playbackState.update { it.copy(isPhotoActive = false, activePhotoPath = null) }
-            val trimStart = TimelineUtils.getEffectiveTrimStart(nextClip)
-            val currentGen = seekGeneration.incrementAndGet()
-            confirmedSeekGeneration = currentGen
-            prepareAndSeekVideo(nextClip, nextIndex, trimStart, currentGen)
+            val currentExoPos = exoPlayer.currentPosition
+            val isContiguousSameSource = !isDifferentSource && kotlin.math.abs(currentExoPos - trimStart) < 350L
+
+            if (isContiguousSameSource && exoPlayer.isPlaying) {
+                // Mesma fonte e corte contínuo (ex: clipe dividido com transição):
+                // Continua reproduzindo diretamente sem pausa, sem recarregamento e sem seek!
+                loadedClipId = nextClip.id
+                val safeSpeed = TimelineUtils.getSafeSpeed(nextClip)
+                exoPlayer.setPlaybackParameters(PlaybackParameters(safeSpeed))
+                val targetVolume = if (isVideoMuted || nextClip.isMuted) 0f else nextClip.volume.coerceIn(0f, 1f)
+                exoPlayer.volume = targetVolume
+                isInterClipSwitching = false
+            } else {
+                isInterClipSwitching = true
+                lastMasterTickTime = System.currentTimeMillis()
+                val currentGen = seekGeneration.incrementAndGet()
+                confirmedSeekGeneration = currentGen
+                prepareAndSeekVideo(nextClip, nextIndex, trimStart, currentGen)
+            }
         }
 
         audioSyncManager.syncWithMasterPlayhead(nextStartTimeline, isMasterPlaying = _playbackState.value.isPlaying)
@@ -499,6 +554,31 @@ class EditorPlayerManager(
             while (isActive) {
                 delay(25) // ~40 fps polling
                 if (!_playbackState.value.isPlaying) continue
+
+                // Transição suave inter-clipes sem pausar ou reiniciar a linha do tempo
+                if (isInterClipSwitching) {
+                    val now = System.currentTimeMillis()
+                    val deltaMs = (now - lastMasterTickTime).coerceIn(0L, 80L)
+                    lastMasterTickTime = now
+
+                    val currentPos = _playbackState.value.currentPositionMs
+                    val nextPos = currentPos + deltaMs
+                    val totalDuration = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios, activeTexts, activeStickers)
+
+                    if (nextPos >= totalDuration) {
+                        pause()
+                        _playbackState.update { it.copy(currentPositionMs = totalDuration) }
+                        onTimelinePositionChanged?.invoke(totalDuration)
+                    } else {
+                        _playbackState.update { it.copy(currentPositionMs = nextPos) }
+                        onTimelinePositionChanged?.invoke(nextPos)
+                        audioSyncManager.syncWithMasterPlayhead(nextPos, isMasterPlaying = true)
+                        if (exoPlayer.isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
+                            isInterClipSwitching = false
+                        }
+                    }
+                    continue
+                }
 
                 // Se houver uma requisição de seek em andamento, protege currentTimeMs contra coordenadas antigas
                 if (seekGeneration.get() != confirmedSeekGeneration) {
@@ -566,7 +646,7 @@ class EditorPlayerManager(
                     val deltaMs = now - lastPhotoTickTime
                     lastPhotoTickTime = now
 
-                    val totalDuration = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios)
+                    val totalDuration = getTotalDuration()
                     val nextPos = _playbackState.value.currentPositionMs + deltaMs
 
                     if (nextPos >= totalDuration) {
