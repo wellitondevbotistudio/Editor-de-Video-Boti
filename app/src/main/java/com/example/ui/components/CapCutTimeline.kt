@@ -299,10 +299,10 @@ fun CapCutMultiTrackTimeline(
                 .background(Color(0xFF13131D))
                 .border(androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF1E1E2A)))
         ) {
-            // Cabeçalho fixo esquerdo correspondente às faixas (72.dp)
+            // Cabeçalho fixo esquerdo correspondente às faixas (76.dp)
             Box(
                 modifier = Modifier
-                    .width(72.dp)
+                    .width(76.dp)
                     .height(28.dp)
                     .background(Color(0xFF161622)),
                 contentAlignment = Alignment.Center
@@ -371,14 +371,14 @@ fun CapCutMultiTrackTimeline(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f, fill = false)
+                .weight(1f, fill = true)
                 .heightIn(min = 90.dp, max = totalTracksHeight)
                 .verticalScroll(verticalScrollState)
         ) {
             // LEFT COLUMN: Fixed Track Control Headers
             Column(
                 modifier = Modifier
-                    .width(72.dp)
+                    .width(76.dp)
                     .height(totalTracksHeight)
                     .background(Color(0xFF111118))
                     .border(androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF1E1E2A)))

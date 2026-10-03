@@ -158,19 +158,36 @@ fun PlayerScreen(
                     .clickable { viewModel.togglePlayback() },
                 contentAlignment = Alignment.Center
             ) {
-                val ratio = project?.aspectRatio?.ratio ?: (16f / 9f)
-                Box(
+                BoxWithConstraints(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(ratio)
-                        .clip(RoundedCornerShape(12.dp))
+                        .fillMaxSize()
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    AsyncImage(
-                        model = project?.thumbUrl,
-                        contentDescription = "Player",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
+                    val frameRatio = project?.aspectRatio?.ratio ?: (16f / 9f)
+                    val containerRatio = maxWidth / maxHeight
+                    val videoModifier = if (containerRatio > frameRatio) {
+                        Modifier
+                            .fillMaxHeight(0.96f)
+                            .aspectRatio(frameRatio)
+                    } else {
+                        Modifier
+                            .fillMaxWidth(0.96f)
+                            .aspectRatio(frameRatio)
+                    }
+
+                    Box(
+                        modifier = videoModifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF111111))
+                    ) {
+                        AsyncImage(
+                            model = project?.thumbUrl,
+                            contentDescription = "Player",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
                 }
             }
 

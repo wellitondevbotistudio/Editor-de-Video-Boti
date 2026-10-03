@@ -171,6 +171,7 @@ fun BotiIconButton(
         color = backgroundColor,
         border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
         modifier = modifier
+            .minimumInteractiveComponentSize()
             .size(size)
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
     ) {

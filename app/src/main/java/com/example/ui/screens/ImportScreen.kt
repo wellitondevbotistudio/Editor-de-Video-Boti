@@ -323,9 +323,9 @@ fun ImportScreen(
                     }
                 }
             } else {
-                // Grid 3 colunas de mídias (conforme Tela 4 de layout app.png)
+                // Grid responsivo de mídias (adapta de 3 colunas em phones a mais em tablets)
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Adaptive(minSize = 105.dp),
                     modifier = Modifier.fillMaxSize(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),

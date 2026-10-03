@@ -108,7 +108,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             repository.getAllProjects().collect { projectList ->
                 _uiState.update { state ->
                     val updatedCurrent = if (state.currentProject != null) {
-                        projectList.find { it.id == state.currentProject.id } ?: projectList.firstOrNull()
+                        projectList.find { it.id == state.currentProject.id } ?: state.currentProject
                     } else {
                         projectList.firstOrNull()
                     }
