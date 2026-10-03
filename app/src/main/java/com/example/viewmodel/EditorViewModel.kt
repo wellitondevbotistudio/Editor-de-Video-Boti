@@ -1483,9 +1483,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun release() {
+        playerManager.release()
+    }
+
     override fun onCleared() {
         super.onCleared()
-        playerManager.release()
+        release()
     }
 
     fun startExport(options: ExportOptions) {

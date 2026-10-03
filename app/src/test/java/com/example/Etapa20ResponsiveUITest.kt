@@ -51,6 +51,9 @@ class Etapa20ResponsiveUITest {
     @After
     @Throws(IOException::class)
     fun teardown() {
+        if (::viewModel.isInitialized) {
+            viewModel.release()
+        }
         Dispatchers.resetMain()
     }
 
@@ -431,7 +434,7 @@ class Etapa20ResponsiveUITest {
         // Controles de Playback
         assertFalse(viewModel.uiState.value.isPlaying)
         viewModel.togglePlayback()
-        testDispatcher.scheduler.advanceUntilIdle()
+        testDispatcher.scheduler.runCurrent()
         assertTrue("Toggle playback deve ativar a reprodução", viewModel.uiState.value.isPlaying)
 
         viewModel.togglePlayback()

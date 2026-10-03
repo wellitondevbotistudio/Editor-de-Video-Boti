@@ -45,6 +45,9 @@ class Etapa18InteractionTest {
     @After
     @Throws(IOException::class)
     fun teardown() {
+        if (::viewModel.isInitialized) {
+            viewModel.release()
+        }
         Dispatchers.resetMain()
     }
 
