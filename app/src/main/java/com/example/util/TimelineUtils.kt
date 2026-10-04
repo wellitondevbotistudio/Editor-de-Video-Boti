@@ -462,4 +462,191 @@ object TimelineUtils {
 
         return Pair(updatedTracks, newTrackId)
     }
+
+    /**
+     * Empacotamento ótimo em camadas (Lane Packing / Interval Scheduling)
+     * Quantidade de camadas simultâneas = quantidade de elementos sobrepostos naquele intervalo.
+     * Quando um elemento termina, a camada é reutilizada sem sobreposição.
+     */
+    fun <T> packIntoLanes(
+        items: List<T>,
+        getStartMs: (T) -> Long,
+        getDurationMs: (T) -> Long
+    ): List<List<T>> {
+        if (items.isEmpty()) return emptyList()
+        val sorted = items.sortedBy { getStartMs(it) }
+        val lanes = mutableListOf<MutableList<T>>()
+        val laneEndTimes = mutableListOf<Long>()
+
+        for (item in sorted) {
+            val start = getStartMs(item)
+            val duration = getDurationMs(item).coerceAtLeast(100L)
+            val end = start + duration
+            var placed = false
+            for (i in lanes.indices) {
+                if (laneEndTimes[i] <= start) {
+                    lanes[i].add(item)
+                    laneEndTimes[i] = end
+                    placed = true
+                    break
+                }
+            }
+            if (!placed) {
+                lanes.add(mutableListOf(item))
+                laneEndTimes.add(end)
+            }
+        }
+        return lanes
+    }
+
+    fun splitStickerAtPlayhead(
+        stickers: List<com.example.model.StickerItem>,
+        stickerId: String,
+        playheadMs: Long
+    ): Pair<List<com.example.model.StickerItem>, String?> {
+        val index = stickers.indexOfFirst { it.id == stickerId }
+        if (index == -1) return Pair(stickers, null)
+        val stk = stickers[index]
+        val start = stk.startTimeMs
+        val end = start + stk.durationMs
+        if (playheadMs <= start + 150L || playheadMs >= end - 150L) {
+            return Pair(stickers, null)
+        }
+        val part1Duration = playheadMs - start
+        val part2Duration = end - playheadMs
+        val newId = "stk_split_" + java.util.UUID.randomUUID().toString().take(6)
+        val part1 = stk.copy(durationMs = part1Duration)
+        val part2 = stk.copy(id = newId, startTimeMs = playheadMs, durationMs = part2Duration)
+        val updated = stickers.toMutableList().apply {
+            set(index, part1)
+            add(index + 1, part2)
+        }
+        return Pair(updated, newId)
+    }
+
+    fun splitTextOverlayAtPlayhead(
+        texts: List<com.example.model.TextOverlayItem>,
+        textId: String,
+        playheadMs: Long
+    ): Pair<List<com.example.model.TextOverlayItem>, String?> {
+        val index = texts.indexOfFirst { it.id == textId }
+        if (index == -1) return Pair(texts, null)
+        val txt = texts[index]
+        val start = txt.startTimeMs
+        val end = start + txt.durationMs
+        if (playheadMs <= start + 150L || playheadMs >= end - 150L) {
+            return Pair(texts, null)
+        }
+        val part1Duration = playheadMs - start
+        val part2Duration = end - playheadMs
+        val newId = "txt_split_" + java.util.UUID.randomUUID().toString().take(6)
+        val part1 = txt.copy(durationMs = part1Duration)
+        val part2 = txt.copy(id = newId, startTimeMs = playheadMs, durationMs = part2Duration)
+        val updated = texts.toMutableList().apply {
+            set(index, part1)
+            add(index + 1, part2)
+        }
+        return Pair(updated, newId)
+    }
+
+    fun duplicateSticker(
+        stickers: List<com.example.model.StickerItem>,
+        stickerId: String
+    ): Pair<List<com.example.model.StickerItem>, String?> {
+        val index = stickers.indexOfFirst { it.id == stickerId }
+        if (index == -1) return Pair(stickers, null)
+        val original = stickers[index]
+        val newId = "stk_dup_" + java.util.UUID.randomUUID().toString().take(6)
+        val dup = original.copy(
+            id = newId,
+            startTimeMs = original.startTimeMs + original.durationMs,
+            name = "${original.name} (Cópia)"
+        )
+        val updated = stickers.toMutableList().apply {
+            add(index + 1, dup)
+        }
+        return Pair(updated, newId)
+    }
+
+    fun duplicateTextOverlay(
+        texts: List<com.example.model.TextOverlayItem>,
+        textId: String
+    ): Pair<List<com.example.model.TextOverlayItem>, String?> {
+        val index = texts.indexOfFirst { it.id == textId }
+        if (index == -1) return Pair(texts, null)
+        val original = texts[index]
+        val newId = "txt_dup_" + java.util.UUID.randomUUID().toString().take(6)
+        val dup = original.copy(
+            id = newId,
+            startTimeMs = original.startTimeMs + original.durationMs
+        )
+        val updated = texts.toMutableList().apply {
+            add(index + 1, dup)
+        }
+        return Pair(updated, newId)
+    }
+
+    fun duplicateAudioTrack(
+        tracks: List<com.example.model.AudioTrackItem>,
+        trackId: String
+    ): Pair<List<com.example.model.AudioTrackItem>, String?> {
+        val index = tracks.indexOfFirst { it.id == trackId }
+        if (index == -1) return Pair(tracks, null)
+        val original = tracks[index]
+        val newId = "audio_dup_" + java.util.UUID.randomUUID().toString().take(6)
+        val dup = original.copy(
+            id = newId,
+            timelineStartMs = getAudioTimelineEndMs(original),
+            name = "${original.name} (Cópia)"
+        )
+        val updated = tracks.toMutableList().apply {
+            add(index + 1, dup)
+        }
+        return Pair(updated, newId)
+    }
+
+    data class PackedLaneItem<T>(
+        val item: T,
+        val startMs: Long,
+        val durationMs: Long,
+        val laneIndex: Int
+    )
+
+    /**
+     * Empacotamento dinâmico em camadas/trilhas (Greedy Interval Coloring).
+     * Quantidade de elementos simultâneos = quantidade de camadas necessárias naquele intervalo.
+     * Quando um elemento termina, a camada é reutilizada sem sobreposição.
+     */
+    fun <T> packItemsIntoLanes(
+        items: List<T>,
+        getStartMs: (T) -> Long,
+        getDurationMs: (T) -> Long
+    ): List<PackedLaneItem<T>> {
+        if (items.isEmpty()) return emptyList()
+        val sorted = items.sortedBy { getStartMs(it) }
+        val laneEndTimes = mutableListOf<Long>()
+        val result = mutableListOf<PackedLaneItem<T>>()
+
+        for (item in sorted) {
+            val start = getStartMs(item).coerceAtLeast(0L)
+            val duration = getDurationMs(item).coerceAtLeast(100L)
+            val end = start + duration
+
+            var assignedLane = -1
+            for (i in laneEndTimes.indices) {
+                if (laneEndTimes[i] <= start) {
+                    assignedLane = i
+                    laneEndTimes[i] = end
+                    break
+                }
+            }
+            if (assignedLane == -1) {
+                assignedLane = laneEndTimes.size
+                laneEndTimes.add(end)
+            }
+
+            result.add(PackedLaneItem(item, start, duration, assignedLane))
+        }
+        return result
+    }
 }

@@ -107,6 +107,7 @@ data class StickerItem(
     val localPath: String = "",
     val name: String = "Sticker",
     val isGif: Boolean = false,
+    val isVideo: Boolean = false,
     val startTimeMs: Long = 0L,
     val durationMs: Long = 3000L,
     val posX: Float = 0.5f, // 0..1

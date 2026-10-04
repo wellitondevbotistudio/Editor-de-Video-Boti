@@ -349,6 +349,7 @@ fun StickerEntity.toDomain(): StickerItem {
         localPath = localPath,
         name = name,
         isGif = isGif,
+        isVideo = localPath.endsWith(".mp4", ignoreCase = true) || uri.contains("video", ignoreCase = true),
         startTimeMs = startTimeMs,
         durationMs = durationMs,
         posX = posX,

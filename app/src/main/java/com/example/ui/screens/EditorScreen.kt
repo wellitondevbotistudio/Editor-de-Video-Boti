@@ -109,6 +109,15 @@ fun EditorScreen(
         }
     }
 
+    val overlayPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        uris.forEach { uri ->
+            val isVideo = uri.toString().contains("video", ignoreCase = true)
+            viewModel.importOverlayMedia(uri.toString(), isVideo = isVideo)
+        }
+    }
+
     // Hardware/gesture back handling
     BackHandler(enabled = isFullscreen) {
         isFullscreen = false
@@ -493,7 +502,127 @@ fun EditorScreen(
                             }
                         }
 
-                        // 2. ÁREA DE TIMELINE E CAMADAS (ÁREA GARANTIDA)
+                        // 2. CONTROLES DA PRÉVIA (ENTRE O VÍDEO E A TIMELINE)
+                        Surface(
+                            color = Color(0xFF13131A),
+                            border = androidx.compose.foundation.BorderStroke(0.5.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .padding(horizontal = 12.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                // Fullscreen (esquerda)
+                                IconButton(
+                                    onClick = { isFullscreen = true },
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("fullscreen_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Fullscreen,
+                                        contentDescription = "Tela Cheia",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                // Botão Play / Pause Central
+                                Surface(
+                                    onClick = { viewModel.togglePlayback() },
+                                    shape = CircleShape,
+                                    color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (uiState.isPlaying) BorderSubtle else PrimaryPurpleLight
+                                    ),
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .shadow(if (uiState.isPlaying) 0.dp else 6.dp, CircleShape, spotColor = PrimaryPurple)
+                                        .testTag("btn_play_pause")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                            contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+
+                                // Ações da Direita: Dividir, Desfazer, Refazer
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    IconButton(
+                                        onClick = { viewModel.splitSelectedElementAtPlayhead() },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CallSplit,
+                                            contentDescription = "Dividir",
+                                            tint = PrimaryPurpleLight,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = { viewModel.undo() },
+                                        enabled = uiState.canUndo,
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .testTag("editor_undo_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Undo,
+                                            contentDescription = "Desfazer",
+                                            tint = if (uiState.canUndo) Color.White else TextTertiary.copy(alpha = 0.35f),
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = { viewModel.redo() },
+                                        enabled = uiState.canRedo,
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .testTag("editor_redo_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Redo,
+                                            contentDescription = "Refazer",
+                                            tint = if (uiState.canRedo) Color.White else TextTertiary.copy(alpha = 0.35f),
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. BARRA DE TEMPO & PLAYHEAD INDICATOR (CapCut Style: 00:00 / 00:22)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF0F0F16))
+                                .padding(horizontal = 14.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${formatTime(displayPosition)} / ${formatTime(totalDurationMs)}",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        // 4. ÁREA DE TIMELINE E CAMADAS (ÁREA GARANTIDA)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -530,18 +659,8 @@ fun EditorScreen(
                                     viewModel.selectSticker(stickerId)
                                     viewModel.setActivePanel(ToolPanel.STICKER)
                                 },
-                                onSplitClip = { viewModel.splitClipAtPlayhead() },
-                                onDeleteSelected = {
-                                    if (uiState.selectedClipId != null) {
-                                        viewModel.deleteSelectedClip()
-                                    } else if (uiState.selectedAudioTrackId != null) {
-                                        viewModel.removeAudioTrack(uiState.selectedAudioTrackId!!)
-                                    } else if (uiState.selectedTextId != null) {
-                                        viewModel.removeTextOverlay(uiState.selectedTextId!!)
-                                    } else if (uiState.selectedStickerId != null) {
-                                        viewModel.removeSticker(uiState.selectedStickerId!!)
-                                    }
-                                },
+                                onSplitClip = { viewModel.splitSelectedElementAtPlayhead() },
+                                onDeleteSelected = { viewModel.deleteSelectedElement() },
                                 onUndo = { viewModel.undo() },
                                 onRedo = { viewModel.redo() },
                                 onAddMedia = onNavigateToImport,
@@ -555,7 +674,7 @@ fun EditorScreen(
                                 onMoveClipLeft = { uiState.selectedClipId?.let { viewModel.moveClipLeft(it) } },
                                 onMoveClipRight = { uiState.selectedClipId?.let { viewModel.moveClipRight(it) } },
                                 onReorderClip = { from, to -> viewModel.reorderClip(from, to) },
-                                onDuplicateSelected = { viewModel.duplicateClip() },
+                                onDuplicateSelected = { viewModel.duplicateSelectedElement() },
                                 onMoveText = { textId, newStart ->
                                     val txt = project.texts.find { it.id == textId }
                                     if (txt != null) {
@@ -571,7 +690,11 @@ fun EditorScreen(
                                 onMoveAudio = { audioId, newStart ->
                                     viewModel.updateAudioTrackPosition(audioId, newStart)
                                 },
-                                onAddOverlay = { viewModel.setActivePanel(ToolPanel.STICKER) },
+                                onAddOverlay = {
+                                    overlayPickerLauncher.launch(
+                                        androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                    )
+                                },
                                 onClearSelection = { viewModel.clearAllSelections() },
                                 onToggleTextLock = { viewModel.toggleTextLock() },
                                 onToggleTextVisibility = { viewModel.toggleTextVisibility() },
@@ -584,15 +707,21 @@ fun EditorScreen(
                                 onToggleOverlayVisibility = { viewModel.toggleOverlayVisibility() },
                                 onToggleAudioLock = { viewModel.toggleAudioLock() },
                                 onToggleAudioMute = { viewModel.toggleAudioMute() },
+                                onTrimClip = { clipId, s, e -> viewModel.commitTrim(clipId, s, e) },
+                                onTrimSticker = { id, s, d -> viewModel.updateStickerTiming(id, s, d) },
+                                onTrimText = { id, s, d -> viewModel.updateTextOverlayTiming(id, s, d) },
+                                onTrimAudio = { id, s, e -> viewModel.updateAudioTrackTrim(id, s, e) },
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
 
-                        // 3. BARRA DE FERRAMENTAS / PAINEL (OCUPA SEU PRÓPRIO ESPAÇO, NUNCA SOBREPÕE A TIMELINE)
+                        // 5. BARRA DE FERRAMENTAS / PAINEL (OCUPA SEU PRÓPRIO ESPAÇO, NUNCA SOBREPÕE A TIMELINE)
                         Surface(
                             color = SurfaceElevated,
                             border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
                         ) {
                             if (showEditTools) {
                                 Column(
@@ -637,12 +766,12 @@ fun EditorScreen(
 
                                     val editTools = listOf(
                                         Triple("Cortar", Icons.Default.ContentCut) { viewModel.setActivePanel(ToolPanel.TRIM) },
-                                        Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitClipAtPlayhead() },
-                                        Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedClip(); viewModel.setActivePanel(ToolPanel.NONE) },
+                                        Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitSelectedElementAtPlayhead() },
+                                        Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) },
                                         Triple("Velocidade", Icons.Default.Speed) { viewModel.setActivePanel(ToolPanel.SPEED) },
                                         Triple("Volume", Icons.Default.VolumeUp) { viewModel.setActivePanel(ToolPanel.AUDIO) },
                                         Triple("Ajustes", Icons.Default.Tune) { viewModel.setActivePanel(ToolPanel.ADJUST) },
-                                        Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateClip() },
+                                        Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateSelectedElement() },
                                         Triple("Inverter", Icons.Default.Refresh) { viewModel.setFeedback("Efeito reverso aplicado ao clipe.") },
                                         Triple("Congelar", Icons.Default.AcUnit) { viewModel.setFeedback("Quadro congelado criado na linha do tempo.") },
                                         Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CROP) },
@@ -768,7 +897,16 @@ fun EditorScreen(
                                             ToolPanel.AUDIO -> AudioPanel(viewModel)
                                             ToolPanel.TEXT -> TextPanel(project, uiState.selectedTextId, viewModel)
                                             ToolPanel.TEMPLATES -> TemplatesPanel(project, viewModel)
-                                            ToolPanel.STICKER -> StickerPanel(project, uiState.selectedStickerId, viewModel)
+                                            ToolPanel.STICKER -> StickerPanel(
+                                                project = project,
+                                                selectedStickerId = uiState.selectedStickerId,
+                                                viewModel = viewModel,
+                                                onLaunchPicker = {
+                                                    overlayPickerLauncher.launch(
+                                                        androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                                    )
+                                                }
+                                            )
                                             ToolPanel.TRANSITION -> TransitionPanel(currentClip, viewModel)
                                             ToolPanel.CANVAS -> CanvasPanel(project, viewModel)
                                             ToolPanel.VFX -> VFXPanel(project, viewModel)
@@ -804,126 +942,6 @@ fun EditorScreen(
                                     ToolButton(icon = Icons.Default.FilterFrames, label = "Filtros", isCompact = isCompactHeight, onClick = { viewModel.setActivePanel(ToolPanel.FILTER) })
                                     ToolButton(icon = Icons.Default.Tune, label = "Ajustes", isCompact = isCompactHeight, onClick = { viewModel.setActivePanel(ToolPanel.ADJUST) })
                                     ToolButton(icon = Icons.Default.AspectRatio, label = "Formato", isCompact = isCompactHeight, onClick = { viewModel.setActivePanel(ToolPanel.CANVAS) })
-                                }
-                            }
-                        }
-
-                        // 4. CONTROLES DE REPRODUÇÃO / NAVEGAÇÃO DO RODAPÉ
-                        Surface(
-                            color = Color(0xFF13131A),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .navigationBarsPadding()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(46.dp)
-                                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                // Indicador de Tempo
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = SurfaceDark,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
-                                ) {
-                                    Text(
-                                        text = "${formatTime(displayPosition)} / ${formatTime(totalDurationMs)}",
-                                        color = TextSecondary,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                                    )
-                                }
-
-                                // Botão Play / Pause Central
-                                Surface(
-                                    onClick = { viewModel.togglePlayback() },
-                                    shape = CircleShape,
-                                    color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        if (uiState.isPlaying) BorderSubtle else PrimaryPurpleLight
-                                    ),
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .shadow(if (uiState.isPlaying) 0.dp else 6.dp, CircleShape, spotColor = PrimaryPurple)
-                                        .testTag("btn_play_pause")
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                            contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-
-                                // Ações da Direita: Dividir, Desfazer, Refazer, Tela Cheia
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    IconButton(
-                                        onClick = { viewModel.splitClipAtPlayhead() },
-                                        enabled = currentClip != null,
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.CallSplit,
-                                            contentDescription = "Dividir",
-                                            tint = if (currentClip != null) PrimaryPurpleLight else TextTertiary.copy(alpha = 0.35f),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-
-                                    IconButton(
-                                        onClick = { viewModel.undo() },
-                                        enabled = uiState.canUndo,
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .testTag("editor_undo_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.Undo,
-                                            contentDescription = "Desfazer",
-                                            tint = if (uiState.canUndo) Color.White else TextTertiary.copy(alpha = 0.35f),
-                                            modifier = Modifier.size(17.dp)
-                                        )
-                                    }
-
-                                    IconButton(
-                                        onClick = { viewModel.redo() },
-                                        enabled = uiState.canRedo,
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .testTag("editor_redo_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.Redo,
-                                            contentDescription = "Refazer",
-                                            tint = if (uiState.canRedo) Color.White else TextTertiary.copy(alpha = 0.35f),
-                                            modifier = Modifier.size(17.dp)
-                                        )
-                                    }
-
-                                    IconButton(
-                                        onClick = { isFullscreen = true },
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .testTag("fullscreen_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Fullscreen,
-                                            contentDescription = "Tela Cheia",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(19.dp)
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -1080,18 +1098,8 @@ fun EditorScreen(
                                         viewModel.selectSticker(stickerId)
                                         viewModel.setActivePanel(ToolPanel.STICKER)
                                     },
-                                    onSplitClip = { viewModel.splitClipAtPlayhead() },
-                                    onDeleteSelected = {
-                                        if (uiState.selectedClipId != null) {
-                                            viewModel.deleteSelectedClip()
-                                        } else if (uiState.selectedAudioTrackId != null) {
-                                            viewModel.removeAudioTrack(uiState.selectedAudioTrackId!!)
-                                        } else if (uiState.selectedTextId != null) {
-                                            viewModel.removeTextOverlay(uiState.selectedTextId!!)
-                                        } else if (uiState.selectedStickerId != null) {
-                                            viewModel.removeSticker(uiState.selectedStickerId!!)
-                                        }
-                                    },
+                                    onSplitClip = { viewModel.splitSelectedElementAtPlayhead() },
+                                    onDeleteSelected = { viewModel.deleteSelectedElement() },
                                     onUndo = { viewModel.undo() },
                                     onRedo = { viewModel.redo() },
                                     onAddMedia = onNavigateToImport,
@@ -1105,7 +1113,7 @@ fun EditorScreen(
                                     onMoveClipLeft = { uiState.selectedClipId?.let { viewModel.moveClipLeft(it) } },
                                     onMoveClipRight = { uiState.selectedClipId?.let { viewModel.moveClipRight(it) } },
                                     onReorderClip = { from, to -> viewModel.reorderClip(from, to) },
-                                    onDuplicateSelected = { viewModel.duplicateClip() },
+                                    onDuplicateSelected = { viewModel.duplicateSelectedElement() },
                                     onMoveText = { textId, newStart ->
                                         val txt = project.texts.find { it.id == textId }
                                         if (txt != null) {
@@ -1121,7 +1129,15 @@ fun EditorScreen(
                                     onMoveAudio = { audioId, newStart ->
                                         viewModel.updateAudioTrackPosition(audioId, newStart)
                                     },
-                                    onAddOverlay = { viewModel.setActivePanel(ToolPanel.STICKER) },
+                                    onAddOverlay = {
+                                        overlayPickerLauncher.launch(
+                                            androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                        )
+                                    },
+                                    onTrimClip = { clipId, s, e -> viewModel.commitTrim(clipId, s, e) },
+                                    onTrimSticker = { id, s, d -> viewModel.updateStickerTiming(id, s, d) },
+                                    onTrimText = { id, s, d -> viewModel.updateTextOverlayTiming(id, s, d) },
+                                    onTrimAudio = { id, s, e -> viewModel.updateAudioTrackTrim(id, s, e) },
                                     onClearSelection = { viewModel.clearAllSelections() },
                                     onToggleTextLock = { viewModel.toggleTextLock() },
                                     onToggleTextVisibility = { viewModel.toggleTextVisibility() },
@@ -3061,7 +3077,8 @@ private fun TemplatesPanel(
 private fun StickerPanel(
     project: ProjectItem,
     selectedStickerId: String?,
-    viewModel: EditorViewModel
+    viewModel: EditorViewModel,
+    onLaunchPicker: () -> Unit = {}
 ) {
     val selectedSticker = project.stickers.find { it.id == selectedStickerId }
 
@@ -3190,9 +3207,28 @@ private fun StickerPanel(
         }
 
         Column(modifier = Modifier.fillMaxWidth()) {
-            Text("Adicionar Sticker ou GIF Animado", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text("Toque para inserir no playhead atual", color = TextTertiary, fontSize = 11.sp)
-            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Camadas & Sobreposições", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Adicione stickers, GIFs ou mídias da galeria", color = TextTertiary, fontSize = 11.sp)
+                }
+                Button(
+                    onClick = onLaunchPicker,
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("import_overlay_media_button")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Importar Mídia", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Categorias
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

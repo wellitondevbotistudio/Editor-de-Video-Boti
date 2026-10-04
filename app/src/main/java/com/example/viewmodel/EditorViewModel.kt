@@ -587,7 +587,21 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     // ---------------- TIMELINE OPERATIONS (SPLIT, TRIM, REORDER) ----------------
 
+    fun splitSelectedElementAtPlayhead() {
+        val state = _uiState.value
+        when {
+            state.selectedStickerId != null -> splitStickerAtPlayhead(state.selectedStickerId)
+            state.selectedTextId != null -> splitTextOverlayAtPlayhead(state.selectedTextId)
+            state.selectedAudioTrackId != null -> splitAudioTrackAtPlayhead(state.selectedAudioTrackId)
+            else -> splitMainClipAtPlayhead()
+        }
+    }
+
     fun splitClipAtPlayhead() {
+        splitSelectedElementAtPlayhead()
+    }
+
+    private fun splitMainClipAtPlayhead() {
         val cur = _uiState.value.currentProject ?: return
         if (cur.clips.isEmpty()) {
             setFeedback("Não há clipes na timeline para dividir.")
@@ -676,10 +690,31 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         setFeedback("Corte aplicado")
     }
 
+    fun duplicateSelectedElement() {
+        val state = _uiState.value
+        when {
+            state.selectedStickerId != null -> duplicateSticker(state.selectedStickerId)
+            state.selectedTextId != null -> duplicateTextOverlay(state.selectedTextId)
+            state.selectedAudioTrackId != null -> duplicateAudioTrack(state.selectedAudioTrackId)
+            state.selectedClipId != null -> duplicateMainClip(state.selectedClipId)
+            else -> {
+                val cur = _uiState.value.currentProject ?: return
+                cur.clips.firstOrNull()?.let { duplicateMainClip(it.id) }
+            }
+        }
+    }
+
     fun duplicateClip(clipId: String? = null) {
+        if (clipId != null) {
+            duplicateMainClip(clipId)
+        } else {
+            duplicateSelectedElement()
+        }
+    }
+
+    private fun duplicateMainClip(clipId: String) {
         val cur = _uiState.value.currentProject ?: return
-        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
-        val result = TimelineUtils.duplicateClip(cur.clips, targetId) ?: return
+        val result = TimelineUtils.duplicateClip(cur.clips, clipId) ?: return
         val (updatedClips, newClipId) = result
         val updatedProject = cur.copy(clips = updatedClips)
         commitProjectChange(updatedProject)
@@ -777,8 +812,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         setFeedback("Clipe removido")
     }
 
+    fun deleteSelectedElement() {
+        val state = _uiState.value
+        when {
+            state.selectedStickerId != null -> removeSticker(state.selectedStickerId)
+            state.selectedTextId != null -> removeTextOverlay(state.selectedTextId)
+            state.selectedAudioTrackId != null -> removeAudioTrack(state.selectedAudioTrackId)
+            else -> deleteClip(state.selectedClipId)
+        }
+    }
+
     fun deleteSelectedClip() {
-        deleteClip(null)
+        deleteSelectedElement()
     }
 
     fun updateClipSpeed(speed: Float, clipId: String? = null) {
@@ -1234,6 +1279,26 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         setFeedback(if (sticker.isGif) "GIF adicionado" else "Sticker adicionado")
     }
 
+    fun importOverlayMedia(uri: String, isVideo: Boolean, name: String = if (isVideo) "Vídeo Sobreposto" else "Foto Sobreposta") {
+        val cur = _uiState.value.currentProject ?: return
+        val currentPlayhead = _uiState.value.currentPositionMs
+        val newSticker = StickerItem(
+            id = "overlay_" + UUID.randomUUID().toString().take(6),
+            uri = uri,
+            name = name,
+            isVideo = isVideo,
+            startTimeMs = currentPlayhead,
+            durationMs = if (isVideo) 5000L else 4000L,
+            posX = 0.5f,
+            posY = 0.5f,
+            scale = 0.8f
+        )
+        val updated = cur.stickers + newSticker
+        commitProjectChange(cur.copy(stickers = updated))
+        _uiState.update { it.copy(selectedStickerId = newSticker.id) }
+        setFeedback(if (isVideo) "Vídeo adicionado como camada" else "Foto adicionada como camada")
+    }
+
     fun updateStickerPosition(id: String, posX: Float, posY: Float) {
         val cur = _uiState.value.currentProject ?: return
         val updated = cur.stickers.map {
@@ -1295,7 +1360,102 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         if (_uiState.value.selectedStickerId == id) {
             _uiState.update { it.copy(selectedStickerId = null) }
         }
-        setFeedback("Sticker removido")
+        setFeedback("Sobreposição removida")
+    }
+
+    fun importOverlayMediaUri(uri: android.net.Uri) {
+        val cur = _uiState.value.currentProject ?: return
+        viewModelScope.launch {
+            try {
+                val stored = storageManager.copyUriToProjectMedia(cur.id, uri)
+                val metadata = metadataExtractor.extractMetadata(cur.id, stored.file, stored.mimeType)
+                val isVideo = metadata.mediaType == MediaType.VIDEO
+                val durationMs = if (isVideo) metadata.durationMs.coerceAtLeast(1000L) else 4000L
+                val newOverlay = StickerItem(
+                    id = "overlay_" + UUID.randomUUID().toString().take(6),
+                    uri = uri.toString(),
+                    localPath = stored.file.absolutePath,
+                    name = stored.originalName.ifBlank { if (isVideo) "Vídeo Sobreposto" else "Foto Sobreposta" },
+                    isGif = stored.mimeType.contains("gif", ignoreCase = true),
+                    isVideo = isVideo,
+                    startTimeMs = _uiState.value.currentPositionMs,
+                    durationMs = durationMs,
+                    posX = 0.5f,
+                    posY = 0.5f,
+                    scale = 0.75f,
+                    rotation = 0f
+                )
+                val updatedProject = cur.copy(stickers = cur.stickers + newOverlay)
+                commitProjectChange(updatedProject)
+                _uiState.update { it.copy(selectedStickerId = newOverlay.id) }
+                setFeedback(if (isVideo) "Vídeo adicionado como sobreposição" else "Foto adicionada como sobreposição")
+            } catch (e: Exception) {
+                setFeedback("Erro ao importar sobreposição: ${e.message}")
+            }
+        }
+    }
+
+    fun splitStickerAtPlayhead(stickerId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = stickerId ?: _uiState.value.selectedStickerId ?: return
+        val playhead = _uiState.value.currentPositionMs
+        val (updated, newId) = TimelineUtils.splitStickerAtPlayhead(cur.stickers, targetId, playhead)
+        if (newId != null) {
+            commitProjectChange(cur.copy(stickers = updated))
+            _uiState.update { it.copy(selectedStickerId = newId) }
+            setFeedback("Sobreposição dividida")
+        } else {
+            setFeedback("Posição inválida para dividir sobreposição")
+        }
+    }
+
+    fun duplicateSticker(stickerId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = stickerId ?: _uiState.value.selectedStickerId ?: return
+        val (updated, newId) = TimelineUtils.duplicateSticker(cur.stickers, targetId)
+        if (newId != null) {
+            commitProjectChange(cur.copy(stickers = updated))
+            _uiState.update { it.copy(selectedStickerId = newId) }
+            setFeedback("Sobreposição duplicada")
+        }
+    }
+
+    fun splitTextOverlayAtPlayhead(textId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = textId ?: _uiState.value.selectedTextId ?: return
+        val playhead = _uiState.value.currentPositionMs
+        val (updated, newId) = TimelineUtils.splitTextOverlayAtPlayhead(cur.texts, targetId, playhead)
+        if (newId != null) {
+            commitProjectChange(cur.copy(texts = updated))
+            _uiState.update { it.copy(selectedTextId = newId) }
+            setFeedback("Texto dividido")
+        } else {
+            setFeedback("Posição inválida para dividir texto")
+        }
+    }
+
+    fun duplicateTextOverlay(textId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = textId ?: _uiState.value.selectedTextId ?: return
+        val (updated, newId) = TimelineUtils.duplicateTextOverlay(cur.texts, targetId)
+        if (newId != null) {
+            commitProjectChange(cur.copy(texts = updated))
+            _uiState.update { it.copy(selectedTextId = newId) }
+            setFeedback("Texto duplicado")
+        }
+    }
+
+    fun duplicateAudioTrack(trackId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = trackId ?: _uiState.value.selectedAudioTrackId ?: return
+        val (updated, newId) = TimelineUtils.duplicateAudioTrack(cur.audios, targetId)
+        if (newId != null) {
+            commitProjectChange(cur.copy(audios = updated))
+            _uiState.update { it.copy(selectedAudioTrackId = newId) }
+            val newTrack = updated.find { it.id == newId }
+            if (newTrack != null) loadWaveformForTrack(newTrack)
+            setFeedback("Áudio duplicado")
+        }
     }
 
     // ---------------- MULTI-TRACK AUDIO MANAGEMENT ----------------

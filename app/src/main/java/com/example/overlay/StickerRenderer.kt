@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.Icon
@@ -178,6 +179,22 @@ fun StickerLayer(
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize()
                             )
+                        }
+
+                        if (item.isVideo) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(4.dp)
+                                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White, modifier = Modifier.size(10.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text("VÍDEO", color = Color.White, fontSize = 8.sp)
+                                }
+                            }
                         }
 
                         // Alças de controle quando selecionado
