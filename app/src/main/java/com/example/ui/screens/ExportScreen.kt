@@ -387,9 +387,10 @@ fun ExportScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        val exportPath = uiState.lastExportedFilePath ?: project?.lastExportedPath
                         OutlinedButton(
                             onClick = {
-                                uiState.lastExportedFilePath?.let { path ->
+                                exportPath?.let { path ->
                                     viewModel.openVideoInExternalPlayer(context, path)
                                 }
                             },
@@ -402,7 +403,7 @@ fun ExportScreen(
                         }
                         OutlinedButton(
                             onClick = {
-                                uiState.lastExportedFilePath?.let { path ->
+                                exportPath?.let { path ->
                                     viewModel.shareVideo(context, path)
                                 }
                             },

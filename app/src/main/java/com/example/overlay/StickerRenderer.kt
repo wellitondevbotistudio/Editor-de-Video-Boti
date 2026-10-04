@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -19,6 +20,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -93,29 +96,32 @@ fun StickerLayer(
                     val offsetX = ((item.posX - 0.5f) * canvasWidth.value).dp + animState.translationX.dp
                     val offsetY = ((item.posY - 0.5f) * canvasHeight.value).dp + animState.translationY.dp
 
+                    val currentItem by rememberUpdatedState(item)
                     val gestureModifier = if (isLocked) {
                         Modifier.clickable { onSelectSticker(item.id) }
                     } else {
                         Modifier
-                            .clickable { onSelectSticker(item.id) }
+                            .pointerInput(item.id) {
+                                detectTapGestures(
+                                    onTap = { onSelectSticker(item.id) }
+                                )
+                            }
                             .pointerInput(item.id, canvasWpx, canvasHpx) {
-                                detectTransformGestures { _, pan, zoom, rotationChange ->
-                                    if (pan.x != 0f || pan.y != 0f) {
-                                        val deltaX = if (canvasWpx > 0f) pan.x / canvasWpx else 0f
-                                        val deltaY = if (canvasHpx > 0f) pan.y / canvasHpx else 0f
-                                        val newX = (item.posX + deltaX).coerceIn(0.05f, 0.95f)
-                                        val newY = (item.posY + deltaY).coerceIn(0.05f, 0.95f)
-                                        onMoveSticker(item.id, newX, newY)
+                                detectDragGestures(
+                                    onDragStart = {
+                                        onSelectSticker(item.id)
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        if (canvasWpx > 0f && canvasHpx > 0f) {
+                                            val deltaX = dragAmount.x / canvasWpx
+                                            val deltaY = dragAmount.y / canvasHpx
+                                            val newX = (currentItem.posX + deltaX).coerceIn(0.02f, 0.98f)
+                                            val newY = (currentItem.posY + deltaY).coerceIn(0.02f, 0.98f)
+                                            onMoveSticker(item.id, newX, newY)
+                                        }
                                     }
-                                    if (zoom != 1.0f && onScaleSticker != null) {
-                                        val newScale = (item.scale * zoom).coerceIn(0.3f, 3.5f)
-                                        onScaleSticker(item.id, newScale)
-                                    }
-                                    if (rotationChange != 0f && onRotateSticker != null) {
-                                        val newRot = (item.rotation + rotationChange) % 360f
-                                        onRotateSticker(item.id, newRot)
-                                    }
-                                }
+                                )
                             }
                     }
 

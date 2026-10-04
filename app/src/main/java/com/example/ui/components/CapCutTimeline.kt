@@ -515,20 +515,6 @@ fun CapCutMultiTrackTimeline(
                         modifier = Modifier
                             .fillMaxSize()
                             .horizontalScroll(horizontalScrollState)
-                            .pointerInput(safeTotalMs, dpPerSecond) {
-                                detectDragGestures(
-                                    onDragStart = { },
-                                    onDrag = { change, dragAmount ->
-                                        change.consume()
-                                        val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                        if (pxPerSec > 0) {
-                                            val deltaMs = (-dragAmount.x / pxPerSec * 1000f).toLong()
-                                            val newPos = (currentPositionMs + deltaMs).coerceIn(0L, safeTotalMs)
-                                            onSeek(newPos)
-                                        }
-                                    }
-                                )
-                            }
                     ) {
                         Column(
                             modifier = Modifier
@@ -654,6 +640,7 @@ fun CapCutMultiTrackTimeline(
                                                         // Direct Resize Handles when selected (Left |< and Right >|)
                                                         if (isSelected && !isVideoLocked) {
                                                             // Left trim handle
+                                                            var currentTrimStart = clip.trimStartMs
                                                             Box(
                                                                 modifier = Modifier
                                                                     .align(Alignment.CenterStart)
@@ -661,15 +648,19 @@ fun CapCutMultiTrackTimeline(
                                                                     .fillMaxHeight()
                                                                     .background(Color(0xFFFBBF24).copy(alpha = 0.9f), RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
                                                                     .pointerInput(clip.id, dpPerSecond) {
-                                                                        detectDragGestures { change, dragAmount ->
-                                                                            change.consume()
-                                                                            val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                                                            if (pxPerSec > 0) {
-                                                                                val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                                                val newTrimStart = (clip.trimStartMs + deltaMs).coerceAtLeast(0L)
-                                                                                onTrimClip?.invoke(clip.id, newTrimStart, clip.trimEndMs)
+                                                                        detectDragGestures(
+                                                                            onDragStart = { currentTrimStart = clip.trimStartMs },
+                                                                            onDrag = { change, dragAmount ->
+                                                                                change.consume()
+                                                                                val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                                                                if (pxPerSec > 0) {
+                                                                                    val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
+                                                                                    val effectiveEnd = if (clip.trimEndMs > 0) clip.trimEndMs else clip.durationMs
+                                                                                    currentTrimStart = (currentTrimStart + deltaMs).coerceIn(0L, effectiveEnd - 200L)
+                                                                                    onTrimClip?.invoke(clip.id, currentTrimStart, clip.trimEndMs)
+                                                                                }
                                                                             }
-                                                                        }
+                                                                        )
                                                                     },
                                                                 contentAlignment = Alignment.Center
                                                             ) {
@@ -677,6 +668,7 @@ fun CapCutMultiTrackTimeline(
                                                             }
 
                                                             // Right trim handle
+                                                            var currentTrimEnd = if (clip.trimEndMs > 0) clip.trimEndMs else clip.durationMs
                                                             Box(
                                                                 modifier = Modifier
                                                                     .align(Alignment.CenterEnd)
@@ -684,16 +676,18 @@ fun CapCutMultiTrackTimeline(
                                                                     .fillMaxHeight()
                                                                     .background(Color(0xFFFBBF24).copy(alpha = 0.9f), RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
                                                                     .pointerInput(clip.id, dpPerSecond) {
-                                                                        detectDragGestures { change, dragAmount ->
-                                                                            change.consume()
-                                                                            val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                                                            if (pxPerSec > 0) {
-                                                                                val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                                                val effectiveEnd = if (clip.trimEndMs > 0) clip.trimEndMs else clip.durationMs
-                                                                                val newTrimEnd = (effectiveEnd + deltaMs).coerceAtLeast(clip.trimStartMs + 200L)
-                                                                                onTrimClip?.invoke(clip.id, clip.trimStartMs, newTrimEnd)
+                                                                        detectDragGestures(
+                                                                            onDragStart = { currentTrimEnd = if (clip.trimEndMs > 0) clip.trimEndMs else clip.durationMs },
+                                                                            onDrag = { change, dragAmount ->
+                                                                                change.consume()
+                                                                                val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                                                                if (pxPerSec > 0) {
+                                                                                    val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
+                                                                                    currentTrimEnd = (currentTrimEnd + deltaMs).coerceAtLeast(clip.trimStartMs + 200L)
+                                                                                    onTrimClip?.invoke(clip.id, clip.trimStartMs, currentTrimEnd)
+                                                                                }
                                                                             }
-                                                                        }
+                                                                        )
                                                                     },
                                                                 contentAlignment = Alignment.Center
                                                             ) {
@@ -785,102 +779,122 @@ fun CapCutMultiTrackTimeline(
                                                 val widthDp = max(48f, (packed.durationMs / 1000f) * dpPerSecond).dp
                                                 val isSelected = overlayItem.isSelected
 
-                                                Surface(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = when (overlayItem) {
-                                                        is UnifiedOverlayItem.TextOverlay -> LayerTextBg
-                                                        is UnifiedOverlayItem.StickerOverlay -> LayerOverlayBg
-                                                    },
-                                                    border = androidx.compose.foundation.BorderStroke(
-                                                        width = if (isSelected) 2.dp else 1.dp,
-                                                        color = if (isSelected) Color.White else when (overlayItem) {
-                                                            is UnifiedOverlayItem.TextOverlay -> LayerTextBorder
-                                                            is UnifiedOverlayItem.StickerOverlay -> AccentPink
-                                                        }
-                                                    ),
+                                                Box(
                                                     modifier = Modifier
-                                                        .padding(start = startDp)
+                                                        .offset(x = startDp)
                                                         .width(widthDp)
                                                         .fillMaxHeight()
-                                                        .clickable {
+                                                        .clip(RoundedCornerShape(6.dp))
+                                                        .background(
                                                             when (overlayItem) {
-                                                                is UnifiedOverlayItem.TextOverlay -> onSelectText(overlayItem.id)
-                                                                is UnifiedOverlayItem.StickerOverlay -> onSelectSticker(overlayItem.id)
+                                                                is UnifiedOverlayItem.TextOverlay -> LayerTextBg
+                                                                is UnifiedOverlayItem.StickerOverlay -> LayerOverlayBg
                                                             }
-                                                        }
+                                                        )
+                                                        .border(
+                                                            width = if (isSelected) 2.dp else 1.dp,
+                                                            color = if (isSelected) Color.White else when (overlayItem) {
+                                                                is UnifiedOverlayItem.TextOverlay -> LayerTextBorder
+                                                                is UnifiedOverlayItem.StickerOverlay -> AccentPink
+                                                            },
+                                                            shape = RoundedCornerShape(6.dp)
+                                                        )
                                                         .testTag("overlay_block_${overlayItem.id}")
                                                 ) {
-                                                    Box(modifier = Modifier.fillMaxSize()) {
-                                                        // Center Drag Area (moves entire block along timeline)
-                                                        Row(
+                                                    // Center Drag Area (moves entire block along timeline)
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .padding(horizontal = if (isSelected) 14.dp else 6.dp)
+                                                            .pointerInput(overlayItem.id) {
+                                                                detectTapGestures(
+                                                                    onTap = {
+                                                                        when (overlayItem) {
+                                                                            is UnifiedOverlayItem.TextOverlay -> onSelectText(overlayItem.id)
+                                                                            is UnifiedOverlayItem.StickerOverlay -> onSelectSticker(overlayItem.id)
+                                                                        }
+                                                                    }
+                                                                )
+                                                            }
+                                                            .pointerInput(overlayItem.id, dpPerSecond) {
+                                                                var startMs = overlayItem.startTimeMs
+                                                                var accumulatedPx = 0f
+                                                                detectDragGestures(
+                                                                    onDragStart = {
+                                                                        startMs = overlayItem.startTimeMs
+                                                                        accumulatedPx = 0f
+                                                                        when (overlayItem) {
+                                                                            is UnifiedOverlayItem.TextOverlay -> onSelectText(overlayItem.id)
+                                                                            is UnifiedOverlayItem.StickerOverlay -> onSelectSticker(overlayItem.id)
+                                                                        }
+                                                                    },
+                                                                    onDrag = { change, dragAmount ->
+                                                                        change.consume()
+                                                                        accumulatedPx += dragAmount.x
+                                                                        val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                                                        if (pxPerSec > 0) {
+                                                                            val deltaMs = (accumulatedPx / pxPerSec * 1000f).toLong()
+                                                                            val newStart = (startMs + deltaMs).coerceIn(0L, safeTotalMs - 200L)
+                                                                            when (overlayItem) {
+                                                                                is UnifiedOverlayItem.TextOverlay -> onMoveText?.invoke(overlayItem.id, newStart)
+                                                                                is UnifiedOverlayItem.StickerOverlay -> onMoveSticker?.invoke(overlayItem.id, newStart)
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                )
+                                                            },
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = when (overlayItem) {
+                                                                is UnifiedOverlayItem.TextOverlay -> Icons.Default.TextFields
+                                                                is UnifiedOverlayItem.StickerOverlay -> {
+                                                                    if (overlayItem.sticker.isVideo) Icons.Default.Movie
+                                                                    else if (overlayItem.sticker.isGif) Icons.Default.Gif
+                                                                    else Icons.Default.Image
+                                                                }
+                                                            },
+                                                            contentDescription = null,
+                                                            tint = Color.White,
+                                                            modifier = Modifier.size(13.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(
+                                                            text = overlayItem.name,
+                                                            color = Color.White,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
+
+                                                    // Left & Right Resize Handles when Selected
+                                                    if (isSelected) {
+                                                        // Left handle: adjusts start
+                                                        Box(
                                                             modifier = Modifier
-                                                                .fillMaxSize()
-                                                                .padding(horizontal = if (isSelected) 14.dp else 6.dp)
+                                                                .align(Alignment.CenterStart)
+                                                                .width(13.dp)
+                                                                .fillMaxHeight()
+                                                                .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp))
                                                                 .pointerInput(overlayItem.id, dpPerSecond) {
+                                                                    var initialStart = overlayItem.startTimeMs
+                                                                    var originalEnd = overlayItem.startTimeMs + overlayItem.durationMs
+                                                                    var accumulatedPx = 0f
                                                                     detectDragGestures(
                                                                         onDragStart = {
-                                                                            when (overlayItem) {
-                                                                                is UnifiedOverlayItem.TextOverlay -> onSelectText(overlayItem.id)
-                                                                                is UnifiedOverlayItem.StickerOverlay -> onSelectSticker(overlayItem.id)
-                                                                            }
+                                                                            initialStart = overlayItem.startTimeMs
+                                                                            originalEnd = overlayItem.startTimeMs + overlayItem.durationMs
+                                                                            accumulatedPx = 0f
                                                                         },
                                                                         onDrag = { change, dragAmount ->
                                                                             change.consume()
+                                                                            accumulatedPx += dragAmount.x
                                                                             val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
                                                                             if (pxPerSec > 0) {
-                                                                                val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                                                val newStart = (overlayItem.startTimeMs + deltaMs).coerceIn(0L, safeTotalMs - 200L)
-                                                                                when (overlayItem) {
-                                                                                    is UnifiedOverlayItem.TextOverlay -> onMoveText?.invoke(overlayItem.id, newStart)
-                                                                                    is UnifiedOverlayItem.StickerOverlay -> onMoveSticker?.invoke(overlayItem.id, newStart)
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    )
-                                                                },
-                                                            verticalAlignment = Alignment.CenterVertically
-                                                        ) {
-                                                            Icon(
-                                                                imageVector = when (overlayItem) {
-                                                                    is UnifiedOverlayItem.TextOverlay -> Icons.Default.TextFields
-                                                                    is UnifiedOverlayItem.StickerOverlay -> {
-                                                                        if (overlayItem.sticker.isVideo) Icons.Default.Movie
-                                                                        else if (overlayItem.sticker.isGif) Icons.Default.Gif
-                                                                        else Icons.Default.Image
-                                                                    }
-                                                                },
-                                                                contentDescription = null,
-                                                                tint = Color.White,
-                                                                modifier = Modifier.size(13.dp)
-                                                            )
-                                                            Spacer(modifier = Modifier.width(4.dp))
-                                                            Text(
-                                                                text = overlayItem.name,
-                                                                color = Color.White,
-                                                                fontSize = 10.sp,
-                                                                fontWeight = FontWeight.Bold,
-                                                                maxLines = 1,
-                                                                overflow = TextOverflow.Ellipsis
-                                                            )
-                                                        }
-
-                                                        // Left & Right Resize Handles when Selected
-                                                        if (isSelected) {
-                                                            // Left handle: adjusts start
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .align(Alignment.CenterStart)
-                                                                    .width(13.dp)
-                                                                    .fillMaxHeight()
-                                                                    .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp))
-                                                                    .pointerInput(overlayItem.id, dpPerSecond) {
-                                                                        detectDragGestures { change, dragAmount ->
-                                                                            change.consume()
-                                                                            val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                                                            if (pxPerSec > 0) {
-                                                                                val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                                                val originalEnd = overlayItem.startTimeMs + overlayItem.durationMs
-                                                                                val newStart = (overlayItem.startTimeMs + deltaMs).coerceIn(0L, originalEnd - 300L)
+                                                                                val deltaMs = (accumulatedPx / pxPerSec * 1000f).toLong()
+                                                                                val newStart = (initialStart + deltaMs).coerceIn(0L, originalEnd - 300L)
                                                                                 val newDur = originalEnd - newStart
                                                                                 when (overlayItem) {
                                                                                     is UnifiedOverlayItem.TextOverlay -> onTrimText?.invoke(overlayItem.id, newStart, newDur) ?: onMoveText?.invoke(overlayItem.id, newStart)
@@ -888,37 +902,46 @@ fun CapCutMultiTrackTimeline(
                                                                                 }
                                                                             }
                                                                         }
-                                                                    },
-                                                                contentAlignment = Alignment.Center
-                                                            ) {
-                                                                Icon(Icons.Default.ChevronLeft, contentDescription = "Trim início", tint = Color.Black, modifier = Modifier.size(11.dp))
-                                                            }
+                                                                    )
+                                                                },
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Icon(Icons.Default.ChevronLeft, contentDescription = "Trim início", tint = Color.Black, modifier = Modifier.size(11.dp))
+                                                        }
 
-                                                            // Right handle: adjusts duration
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .align(Alignment.CenterEnd)
-                                                                    .width(13.dp)
-                                                                    .fillMaxHeight()
-                                                                    .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
-                                                                    .pointerInput(overlayItem.id, dpPerSecond) {
-                                                                        detectDragGestures { change, dragAmount ->
+                                                        // Right handle: adjusts duration
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .align(Alignment.CenterEnd)
+                                                                .width(13.dp)
+                                                                .fillMaxHeight()
+                                                                .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                                                                .pointerInput(overlayItem.id, dpPerSecond) {
+                                                                    var initialDur = overlayItem.durationMs
+                                                                    var accumulatedPx = 0f
+                                                                    detectDragGestures(
+                                                                        onDragStart = {
+                                                                            initialDur = overlayItem.durationMs
+                                                                            accumulatedPx = 0f
+                                                                        },
+                                                                        onDrag = { change, dragAmount ->
                                                                             change.consume()
+                                                                            accumulatedPx += dragAmount.x
                                                                             val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
                                                                             if (pxPerSec > 0) {
-                                                                                val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                                                val newDur = (overlayItem.durationMs + deltaMs).coerceAtLeast(300L)
+                                                                                val deltaMs = (accumulatedPx / pxPerSec * 1000f).toLong()
+                                                                                val newDur = (initialDur + deltaMs).coerceAtLeast(300L)
                                                                                 when (overlayItem) {
                                                                                     is UnifiedOverlayItem.TextOverlay -> onTrimText?.invoke(overlayItem.id, overlayItem.startTimeMs, newDur)
                                                                                     is UnifiedOverlayItem.StickerOverlay -> onTrimSticker?.invoke(overlayItem.id, overlayItem.startTimeMs, newDur)
                                                                                 }
                                                                             }
                                                                         }
-                                                                    },
-                                                                contentAlignment = Alignment.Center
-                                                            ) {
-                                                                Icon(Icons.Default.ChevronRight, contentDescription = "Trim fim", tint = Color.Black, modifier = Modifier.size(11.dp))
-                                                            }
+                                                                    )
+                                                                },
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Icon(Icons.Default.ChevronRight, contentDescription = "Trim fim", tint = Color.Black, modifier = Modifier.size(11.dp))
                                                         }
                                                     }
                                                 }
@@ -977,110 +1000,138 @@ fun CapCutMultiTrackTimeline(
                                             val isSelected = audio.id == selectedAudioId
                                             val wave = waveforms[audio.id] ?: emptyList()
 
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = LayerAudioBg,
-                                                border = androidx.compose.foundation.BorderStroke(
-                                                    width = if (isSelected) 2.dp else 1.dp,
-                                                    color = if (isSelected) Color.White else LayerAudioWave
-                                                ),
+                                            Box(
                                                 modifier = Modifier
-                                                    .padding(start = startDp)
+                                                    .offset(x = startDp)
                                                     .width(widthDp)
                                                     .fillMaxHeight()
-                                                    .clickable { onSelectAudio(audio.id) }
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(LayerAudioBg)
+                                                    .border(
+                                                        width = if (isSelected) 2.dp else 1.dp,
+                                                        color = if (isSelected) Color.White else LayerAudioWave,
+                                                        shape = RoundedCornerShape(6.dp)
+                                                    )
                                                     .testTag("track_audio_${audio.id}")
                                             ) {
-                                                Box(modifier = Modifier.fillMaxSize()) {
-                                                    // Center drag to move audio position
-                                                    Row(
+                                                // Center drag to move audio position
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .padding(horizontal = if (isSelected) 14.dp else 6.dp)
+                                                        .pointerInput(audio.id) {
+                                                            detectTapGestures(
+                                                                onTap = { onSelectAudio(audio.id) }
+                                                            )
+                                                        }
+                                                        .pointerInput(audio.id, dpPerSecond) {
+                                                            var startMs = audio.timelineStartMs
+                                                            var accumulatedPx = 0f
+                                                            detectDragGestures(
+                                                                onDragStart = {
+                                                                    startMs = audio.timelineStartMs
+                                                                    accumulatedPx = 0f
+                                                                    onSelectAudio(audio.id)
+                                                                },
+                                                                onDrag = { change, dragAmount ->
+                                                                    change.consume()
+                                                                    accumulatedPx += dragAmount.x
+                                                                    val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                                                    if (pxPerSec > 0) {
+                                                                        val deltaMs = (accumulatedPx / pxPerSec * 1000f).toLong()
+                                                                        val newStart = (startMs + deltaMs).coerceIn(0L, safeTotalMs - 300L)
+                                                                        onMoveAudio?.invoke(audio.id, newStart)
+                                                                    }
+                                                                }
+                                                            )
+                                                        },
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.Audiotrack, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(
+                                                        text = audio.name,
+                                                        color = Color.White,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.widthIn(max = 80.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    AudioWaveformBar(
+                                                        amplitudes = wave,
+                                                        isMuted = audio.isMuted || isAudioMuted,
+                                                        color = LayerAudioWave,
                                                         modifier = Modifier
-                                                            .fillMaxSize()
-                                                            .padding(horizontal = if (isSelected) 14.dp else 6.dp)
+                                                            .weight(1f)
+                                                            .fillMaxHeight(0.8f)
+                                                    )
+                                                }
+
+                                                // Left & Right Trim Handles for Audio
+                                                if (isSelected && !isAudioLocked) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .align(Alignment.CenterStart)
+                                                            .width(13.dp)
+                                                            .fillMaxHeight()
+                                                            .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp))
                                                             .pointerInput(audio.id, dpPerSecond) {
+                                                                var initialTrimStart = audio.trimStartMs
+                                                                var accumulatedPx = 0f
                                                                 detectDragGestures(
-                                                                    onDragStart = { onSelectAudio(audio.id) },
+                                                                    onDragStart = {
+                                                                        initialTrimStart = audio.trimStartMs
+                                                                        accumulatedPx = 0f
+                                                                    },
                                                                     onDrag = { change, dragAmount ->
                                                                         change.consume()
+                                                                        accumulatedPx += dragAmount.x
                                                                         val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
                                                                         if (pxPerSec > 0) {
-                                                                            val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                                            val newStart = (audio.timelineStartMs + deltaMs).coerceIn(0L, safeTotalMs - 300L)
-                                                                            onMoveAudio?.invoke(audio.id, newStart)
+                                                                            val deltaMs = (accumulatedPx / pxPerSec * 1000f).toLong()
+                                                                            val newTrimStart = (initialTrimStart + deltaMs).coerceAtLeast(0L)
+                                                                            onTrimAudio?.invoke(audio.id, newTrimStart, audio.trimEndMs)
                                                                         }
                                                                     }
                                                                 )
                                                             },
-                                                        verticalAlignment = Alignment.CenterVertically
+                                                        contentAlignment = Alignment.Center
                                                     ) {
-                                                        Icon(Icons.Default.Audiotrack, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text(
-                                                            text = audio.name,
-                                                            color = Color.White,
-                                                            fontSize = 10.sp,
-                                                            fontWeight = FontWeight.Bold,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis,
-                                                            modifier = Modifier.widthIn(max = 80.dp)
-                                                        )
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        AudioWaveformBar(
-                                                            amplitudes = wave,
-                                                            isMuted = audio.isMuted || isAudioMuted,
-                                                            color = LayerAudioWave,
-                                                            modifier = Modifier
-                                                                .weight(1f)
-                                                                .fillMaxHeight(0.8f)
-                                                        )
+                                                        Icon(Icons.Default.ChevronLeft, contentDescription = "Trim início", tint = Color.Black, modifier = Modifier.size(11.dp))
                                                     }
 
-                                                    // Left & Right Trim Handles for Audio
-                                                    if (isSelected && !isAudioLocked) {
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .align(Alignment.CenterStart)
-                                                                .width(13.dp)
-                                                                .fillMaxHeight()
-                                                                .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp))
-                                                                .pointerInput(audio.id, dpPerSecond) {
-                                                                    detectDragGestures { change, dragAmount ->
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .align(Alignment.CenterEnd)
+                                                            .width(13.dp)
+                                                            .fillMaxHeight()
+                                                            .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                                                            .pointerInput(audio.id, dpPerSecond) {
+                                                                val effectiveEnd = if (audio.trimEndMs > 0) audio.trimEndMs else audio.durationMs
+                                                                var initialTrimEnd = effectiveEnd
+                                                                var accumulatedPx = 0f
+                                                                detectDragGestures(
+                                                                    onDragStart = {
+                                                                        initialTrimEnd = if (audio.trimEndMs > 0) audio.trimEndMs else audio.durationMs
+                                                                        accumulatedPx = 0f
+                                                                    },
+                                                                    onDrag = { change, dragAmount ->
                                                                         change.consume()
+                                                                        accumulatedPx += dragAmount.x
                                                                         val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
                                                                         if (pxPerSec > 0) {
-                                                                            val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                                            val newTrimStart = (audio.trimStartMs + deltaMs).coerceAtLeast(0L)
-                                                                            onTrimAudio?.invoke(audio.id, newTrimStart, audio.trimEndMs)
-                                                                        }
-                                                                    }
-                                                                },
-                                                            contentAlignment = Alignment.Center
-                                                        ) {
-                                                            Icon(Icons.Default.ChevronLeft, contentDescription = "Trim início", tint = Color.Black, modifier = Modifier.size(11.dp))
-                                                        }
-
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .align(Alignment.CenterEnd)
-                                                                .width(13.dp)
-                                                                .fillMaxHeight()
-                                                                .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
-                                                                .pointerInput(audio.id, dpPerSecond) {
-                                                                    detectDragGestures { change, dragAmount ->
-                                                                        change.consume()
-                                                                        val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
-                                                                        if (pxPerSec > 0) {
-                                                                            val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
-                                                                            val effectiveEnd = if (audio.trimEndMs > 0) audio.trimEndMs else audio.durationMs
-                                                                            val newTrimEnd = (effectiveEnd + deltaMs).coerceAtLeast(audio.trimStartMs + 300L)
+                                                                            val deltaMs = (accumulatedPx / pxPerSec * 1000f).toLong()
+                                                                            val newTrimEnd = (initialTrimEnd + deltaMs).coerceAtLeast(audio.trimStartMs + 300L)
                                                                             onTrimAudio?.invoke(audio.id, audio.trimStartMs, newTrimEnd)
                                                                         }
                                                                     }
-                                                                },
-                                                            contentAlignment = Alignment.Center
-                                                        ) {
-                                                            Icon(Icons.Default.ChevronRight, contentDescription = "Trim fim", tint = Color.Black, modifier = Modifier.size(11.dp))
-                                                        }
+                                                                )
+                                                            },
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(Icons.Default.ChevronRight, contentDescription = "Trim fim", tint = Color.Black, modifier = Modifier.size(11.dp))
                                                     }
                                                 }
                                             }

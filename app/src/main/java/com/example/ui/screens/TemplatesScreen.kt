@@ -46,18 +46,13 @@ fun TemplatesScreen(
     val categories = listOf("Em alta", "TikTok / Reels", "Vlog", "Música & Beat", "Cinemático", "Memórias")
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
 
-    val templateList = remember {
-        listOf(
-            VideoTemplateItem(id = "tpl_vlog", title = "Vlog Diário Minimal", category = "Vlog", clipsCount = 4, duration = "00:15", thumbUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=500"),
-            VideoTemplateItem(id = "tpl_memories", title = "Memórias de Verão", category = "Em alta", clipsCount = 5, duration = "00:20", thumbUrl = "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=500"),
-            VideoTemplateItem(id = "tpl_bday", title = "Aniversário Especial", category = "Memórias", clipsCount = 6, duration = "00:30", thumbUrl = "https://images.unsplash.com/photo-1464349095431-e9a21285b5f3?w=500"),
-            VideoTemplateItem(id = "tpl_travel", title = "Viagem & Aventura 4K", category = "Em alta", clipsCount = 8, duration = "00:25", thumbUrl = "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=500"),
-            VideoTemplateItem(id = "tpl_promo", title = "Beat Drop Sincronizado", category = "Música & Beat", clipsCount = 5, duration = "00:12", thumbUrl = "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=500"),
-            VideoTemplateItem(id = "tpl_love", title = "Transições Neon Glitch", category = "TikTok / Reels", clipsCount = 4, duration = "00:18", thumbUrl = "https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=500")
-        )
+    val templateList by viewModel.templates.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.loadTemplates()
     }
 
-    val filteredTemplates = remember(selectedCategoryIndex) {
+    val filteredTemplates = remember(selectedCategoryIndex, templateList) {
         if (selectedCategoryIndex == 0) templateList
         else {
             val selectedCat = categories[selectedCategoryIndex]

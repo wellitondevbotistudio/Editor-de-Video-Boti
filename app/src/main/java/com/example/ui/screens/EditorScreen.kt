@@ -1409,43 +1409,7 @@ private fun VideoPreviewContent(
         val isAnyOverlaySelected = uiState.selectedTextId != null || uiState.selectedStickerId != null
         val isClipSelected = currentClip != null && uiState.selectedClipId == currentClip.id
 
-        // Real Stickers and Animated GIFs Layer
-        StickerLayer(
-            stickers = project.stickers,
-            currentPlayheadMs = uiState.currentPositionMs,
-            selectedStickerId = uiState.selectedStickerId,
-            onSelectSticker = {
-                viewModel.selectSticker(it)
-                if (it != null) viewModel.setActivePanel(ToolPanel.STICKER)
-            },
-            onMoveSticker = { id, newX, newY -> viewModel.updateStickerPosition(id, newX, newY) },
-            onScaleSticker = { id, scale -> viewModel.updateStickerScale(id, scale) },
-            onRotateSticker = { id, rot -> viewModel.updateStickerRotation(id, rot) },
-            onDeleteSticker = { viewModel.removeSticker(it) },
-            isOverlayVisible = project.isOverlayVisible,
-            isOverlayLocked = project.isOverlayLocked,
-            modifier = Modifier.fillMaxSize()
-        )
-
-        // Real Dynamic & Animated Text Overlays Layer
-        TextOverlayLayer(
-            texts = project.texts,
-            currentPlayheadMs = uiState.currentPositionMs,
-            selectedTextId = uiState.selectedTextId,
-            onSelectText = {
-                viewModel.selectTextOverlay(it)
-                if (it != null) viewModel.setActivePanel(ToolPanel.TEXT)
-            },
-            onMoveText = { id, newX, newY -> viewModel.updateTextOverlayPosition(id, newX, newY) },
-            onScaleText = { id, scale -> viewModel.updateTextOverlayScale(id, scale) },
-            onRotateText = { id, rot -> viewModel.updateTextOverlayRotation(id, rot) },
-            onDeleteText = { viewModel.removeTextOverlay(it) },
-            isTextVisible = project.isTextVisible,
-            isTextLocked = project.isTextLocked,
-            modifier = Modifier.fillMaxSize()
-        )
-
-        // Direct Preview Manipulation Overlay for Selected Video/Photo Clip (respeita lock e visibilidade da camada)
+        // Direct Preview Manipulation Overlay for Selected Video/Photo Clip (fica atrás das sobreposições e textos)
         if (isClipSelected && currentClip != null && !project.isVideoLocked && project.isVideoVisible) {
             ClipDirectManipulationOverlay(
                 clip = currentClip,
@@ -1465,6 +1429,42 @@ private fun VideoPreviewContent(
                     }
             )
         }
+
+        // Real Stickers and Animated GIFs Layer (Camada de Sobreposições sobre o vídeo)
+        StickerLayer(
+            stickers = project.stickers,
+            currentPlayheadMs = uiState.currentPositionMs,
+            selectedStickerId = uiState.selectedStickerId,
+            onSelectSticker = {
+                viewModel.selectSticker(it)
+                if (it != null) viewModel.setActivePanel(ToolPanel.STICKER)
+            },
+            onMoveSticker = { id, newX, newY -> viewModel.updateStickerPosition(id, newX, newY) },
+            onScaleSticker = { id, scale -> viewModel.updateStickerScale(id, scale) },
+            onRotateSticker = { id, rot -> viewModel.updateStickerRotation(id, rot) },
+            onDeleteSticker = { viewModel.removeSticker(it) },
+            isOverlayVisible = project.isOverlayVisible,
+            isOverlayLocked = project.isOverlayLocked,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Real Dynamic & Animated Text Overlays Layer (Camada de Textos)
+        TextOverlayLayer(
+            texts = project.texts,
+            currentPlayheadMs = uiState.currentPositionMs,
+            selectedTextId = uiState.selectedTextId,
+            onSelectText = {
+                viewModel.selectTextOverlay(it)
+                if (it != null) viewModel.setActivePanel(ToolPanel.TEXT)
+            },
+            onMoveText = { id, newX, newY -> viewModel.updateTextOverlayPosition(id, newX, newY) },
+            onScaleText = { id, scale -> viewModel.updateTextOverlayScale(id, scale) },
+            onRotateText = { id, rot -> viewModel.updateTextOverlayRotation(id, rot) },
+            onDeleteText = { viewModel.removeTextOverlay(it) },
+            isTextVisible = project.isTextVisible,
+            isTextLocked = project.isTextLocked,
+            modifier = Modifier.fillMaxSize()
+        )
 
         // Subtitles overlay
         val activeSubtitle = project.subtitles.find {
@@ -1533,38 +1533,33 @@ private fun ClipDirectManipulationOverlay(
     viewModel: EditorViewModel,
     modifier: Modifier = Modifier
 ) {
-    var isDragging by remember { mutableStateOf(false) }
+    val currentClip by rememberUpdatedState(clip)
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .graphicsLayer {
-                scaleX = clip.scale * (if (clip.flipHorizontal) -1f else 1f)
-                scaleY = clip.scale * (if (clip.flipVertical) -1f else 1f)
-                rotationZ = clip.rotation
-                translationX = clip.positionX
-                translationY = clip.positionY
+                scaleX = currentClip.scale * (if (currentClip.flipHorizontal) -1f else 1f)
+                scaleY = currentClip.scale * (if (currentClip.flipVertical) -1f else 1f)
+                rotationZ = currentClip.rotation
+                translationX = currentClip.positionX
+                translationY = currentClip.positionY
             }
             .pointerInput(clip.id) {
-                detectTransformGestures { _, pan, zoom, rotationChange ->
-                    val newScale = if (zoom != 1.0f) {
-                        (clip.scale * zoom).coerceIn(0.2f, 5.0f)
-                    } else clip.scale
-                    val newRotation = if (rotationChange != 0f) {
-                        (clip.rotation + rotationChange) % 360f
-                    } else clip.rotation
-
-                    val newPosX = clip.positionX + pan.x
-                    val newPosY = clip.positionY + pan.y
-
-                    viewModel.updateClipTransform(
-                        scale = newScale,
-                        rotation = newRotation,
-                        positionX = newPosX,
-                        positionY = newPosY,
-                        clipId = clip.id
-                    )
-                }
+                detectDragGestures(
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        val newPosX = currentClip.positionX + dragAmount.x
+                        val newPosY = currentClip.positionY + dragAmount.y
+                        viewModel.updateClipTransform(
+                            scale = currentClip.scale,
+                            rotation = currentClip.rotation,
+                            positionX = newPosX,
+                            positionY = newPosY,
+                            clipId = clip.id
+                        )
+                    }
+                )
             }
             .border(
                 width = 2.dp,
@@ -1705,7 +1700,7 @@ private fun ClipDirectManipulationOverlay(
         }
 
         // Indicador central durante arraste ou se transformado
-        if (isDragging || clip.scale != 1.0f || clip.rotation != 0f || clip.positionX != 0f || clip.positionY != 0f) {
+        if (clip.scale != 1.0f || clip.rotation != 0f || clip.positionX != 0f || clip.positionY != 0f) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = Color.Black.copy(alpha = 0.8f),

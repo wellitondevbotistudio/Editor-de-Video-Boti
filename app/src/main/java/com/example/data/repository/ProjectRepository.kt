@@ -41,6 +41,7 @@ class ProjectRepository(
             putBoolean("${project.id}_overlay_lock", project.isOverlayLocked)
             putBoolean("${project.id}_audio_mute", project.isAudioMuted)
             putBoolean("${project.id}_audio_lock", project.isAudioLocked)
+            putString("${project.id}_last_export", project.lastExportedPath)
             apply()
         }
     }
@@ -58,8 +59,26 @@ class ProjectRepository(
             isOverlayVisible = p.getBoolean("${project.id}_overlay_vis", project.isOverlayVisible),
             isOverlayLocked = p.getBoolean("${project.id}_overlay_lock", project.isOverlayLocked),
             isAudioMuted = p.getBoolean("${project.id}_audio_mute", project.isAudioMuted),
-            isAudioLocked = p.getBoolean("${project.id}_audio_lock", project.isAudioLocked)
+            isAudioLocked = p.getBoolean("${project.id}_audio_lock", project.isAudioLocked),
+            lastExportedPath = p.getString("${project.id}_last_export", project.lastExportedPath)
         )
+    }
+
+    fun saveLastExportedPath(projectId: String, path: String) {
+        prefs?.edit()?.apply {
+            putString("${projectId}_last_export", path)
+            putString("global_last_export_path", path)
+            apply()
+        }
+    }
+
+    fun getLastExportedPath(projectId: String? = null): String? {
+        val p = prefs ?: return null
+        if (projectId != null) {
+            val specific = p.getString("${projectId}_last_export", null)
+            if (!specific.isNullOrBlank()) return specific
+        }
+        return p.getString("global_last_export_path", null)
     }
 
     fun getAllProjects(): Flow<List<ProjectItem>> {

@@ -199,7 +199,8 @@ data class ProjectItem(
     val isOverlayVisible: Boolean = true,
     val isOverlayLocked: Boolean = false,
     val isAudioMuted: Boolean = false,
-    val isAudioLocked: Boolean = false
+    val isAudioLocked: Boolean = false,
+    val lastExportedPath: String? = null
 )
 
 data class ExportOptions(
@@ -208,4 +209,17 @@ data class ExportOptions(
     val quality: String = "Alta",
     val removeWatermark: Boolean = true,
     val format: String = "MP4 (H.264)"
+)
+
+/**
+ * Modelo de planos e assinaturas para Google Play Billing.
+ */
+data class PremiumProductPlan(
+    val id: String,
+    val title: String,
+    val price: String,
+    val period: String,
+    val tag: String = "",
+    val isPopular: Boolean = false,
+    val priceInCents: Long = 0L
 )

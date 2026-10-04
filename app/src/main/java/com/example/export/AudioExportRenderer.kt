@@ -6,6 +6,8 @@ import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.net.Uri
+import android.util.Log
 import com.example.model.AudioTrackItem
 import com.example.model.MediaClip
 import com.example.model.MediaType
@@ -18,16 +20,23 @@ import kotlin.math.min
 
 /**
  * Renderizador e codificador de áudio multifaixas para exportação.
- * Suporta mixagem em ponto fixo 16-bit PCM (44.1kHz estéreo), volume, trim, mute e codificação AAC real.
+ * Extrai e decodifica amostras reais 16-bit PCM de arquivos e vídeos via [MediaExtractor] e [MediaCodec],
+ * realizando mixagem precisa multicanal (44.1kHz estéreo) com volume, trim, mute e codificação AAC real.
  */
 class AudioExportRenderer(
     private val context: Context,
     private val config: VideoExportConfig
 ) {
+    companion object {
+        private const val TAG = "AudioExportRenderer"
+    }
 
     private val sampleRate = config.audioSampleRate
     private val channelCount = config.audioChannels
     private val bitRate = config.audioBitrate
+
+    // Cache de amostras PCM decodificadas para cada fonte de mídia (áudio ou vídeo)
+    private val decodedPcmCache = mutableMapOf<String, ShortArray>()
 
     /**
      * Processa, mixa e codifica o áudio do projeto diretamente no [MediaMuxer].
@@ -39,6 +48,9 @@ class AudioExportRenderer(
         audioTrackIndex: Int,
         onProgress: (Float) -> Unit
     ) {
+        // Pré-carrega/decodifica fontes de áudio reais necessárias
+        preloadAudioSources(project)
+
         val encoder = MediaCodec.createEncoderByType("audio/mp4a-latm")
         val audioFormat = MediaFormat.createAudioFormat("audio/mp4a-latm", sampleRate, channelCount).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
@@ -129,7 +141,6 @@ class AudioExportRenderer(
                     val outputBuffer = encoder.getOutputBuffer(outputBufferIndex) ?: continue
 
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                        // Configuração do codec já registrada no Muxer
                         bufferInfo.size = 0
                     }
 
@@ -145,7 +156,6 @@ class AudioExportRenderer(
                         break
                     }
                 } else if (outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER && isInputEos) {
-                    // Sem mais buffers após EOS
                     break
                 }
             }
@@ -154,6 +164,7 @@ class AudioExportRenderer(
                 encoder.stop()
                 encoder.release()
             } catch (_: Exception) {}
+            decodedPcmCache.clear()
         }
     }
 
@@ -165,15 +176,169 @@ class AudioExportRenderer(
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
-            // CSD-0 para AAC-LC 44.1kHz estéreo: 0x12, 0x10 (AudioSpecificConfig)
-            // Se sampleRate for 44100 (index 4), 2 canais (2) -> (2 << 11) | (4 << 7) | (2 << 3) = 0x1210
             val csd0 = ByteBuffer.wrap(byteArrayOf(0x12.toByte(), 0x10.toByte()))
             setByteBuffer("csd-0", csd0)
         }
     }
 
     /**
-     * Mixa amostras de áudio para um bloco de tempo, combinando clipes e faixas de áudio externas.
+     * Decodifica antecipadamente para PCM bruto as fontes de áudio ativas do projeto.
+     */
+    private fun preloadAudioSources(project: ProjectItem) {
+        // Faixas de áudio
+        if (!project.isAudioMuted) {
+            project.audios.forEach { track ->
+                if (!track.isMuted && track.volume > 0f) {
+                    val pathOrUri = when {
+                        track.localPath.isNotBlank() -> track.localPath
+                        track.uri.isNotBlank() -> track.uri
+                        else -> null
+                    }
+                    if (pathOrUri != null && !decodedPcmCache.containsKey(track.id)) {
+                        decodeAudioSourceToPcm(pathOrUri)?.let { pcm ->
+                            decodedPcmCache[track.id] = pcm
+                        }
+                    }
+                }
+            }
+        }
+
+        // Áudio dos clipes de vídeo
+        if (!project.isVideoMuted) {
+            project.clips.forEach { clip ->
+                if (clip.type == MediaType.VIDEO && !clip.isMuted && clip.volume > 0f) {
+                    val pathOrUri = when {
+                        clip.localPath.isNotBlank() -> clip.localPath
+                        clip.uri.isNotBlank() -> clip.uri
+                        else -> null
+                    }
+                    if (pathOrUri != null && !decodedPcmCache.containsKey(clip.id)) {
+                        decodeAudioSourceToPcm(pathOrUri)?.let { pcm ->
+                            decodedPcmCache[clip.id] = pcm
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Decodifica um arquivo de mídia real para amostras PCM estéreo de 16 bits usando MediaExtractor e MediaCodec.
+     */
+    private fun decodeAudioSourceToPcm(sourcePathOrUri: String): ShortArray? {
+        val extractor = MediaExtractor()
+        return try {
+            if (sourcePathOrUri.startsWith("content://") || sourcePathOrUri.startsWith("file://")) {
+                extractor.setDataSource(context, Uri.parse(sourcePathOrUri), null)
+            } else {
+                val f = File(sourcePathOrUri)
+                if (!f.exists() || f.length() == 0L) {
+                    extractor.release()
+                    return null
+                }
+                extractor.setDataSource(f.absolutePath)
+            }
+
+            var audioTrackIndex = -1
+            var trackFormat: MediaFormat? = null
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("audio/")) {
+                    audioTrackIndex = i
+                    trackFormat = format
+                    break
+                }
+            }
+
+            if (audioTrackIndex < 0 || trackFormat == null) {
+                extractor.release()
+                return null
+            }
+
+            extractor.selectTrack(audioTrackIndex)
+            val mime = trackFormat.getString(MediaFormat.KEY_MIME) ?: return null
+            val decoder = MediaCodec.createDecoderByType(mime)
+            decoder.configure(trackFormat, null, null, 0)
+            decoder.start()
+
+            val srcChannels = if (trackFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            } else 2
+
+            val decodedList = ArrayList<Short>()
+            val bufferInfo = MediaCodec.BufferInfo()
+            var inputEos = false
+            var outputEos = false
+            val timeout = 8_000L
+
+            while (!outputEos) {
+                if (!inputEos) {
+                    val inIdx = decoder.dequeueInputBuffer(timeout)
+                    if (inIdx >= 0) {
+                        val inBuf = decoder.getInputBuffer(inIdx)
+                        if (inBuf != null) {
+                            val sampleSize = extractor.readSampleData(inBuf, 0)
+                            if (sampleSize < 0) {
+                                decoder.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputEos = true
+                            } else {
+                                decoder.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                }
+
+                val outIdx = decoder.dequeueOutputBuffer(bufferInfo, timeout)
+                if (outIdx >= 0) {
+                    val outBuf = decoder.getOutputBuffer(outIdx)
+                    if (outBuf != null && bufferInfo.size > 0) {
+                        outBuf.position(bufferInfo.offset)
+                        outBuf.limit(bufferInfo.offset + bufferInfo.size)
+                        outBuf.order(ByteOrder.LITTLE_ENDIAN)
+
+                        val shortView = outBuf.asShortBuffer()
+                        val pcmChunk = ShortArray(shortView.remaining())
+                        shortView.get(pcmChunk)
+
+                        if (srcChannels == 1) {
+                            for (sample in pcmChunk) {
+                                decodedList.add(sample)
+                                decodedList.add(sample)
+                            }
+                        } else {
+                            for (sample in pcmChunk) {
+                                decodedList.add(sample)
+                            }
+                        }
+                    }
+                    decoder.releaseOutputBuffer(outIdx, false)
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        outputEos = true
+                    }
+                } else if (outIdx == MediaCodec.INFO_TRY_AGAIN_LATER && inputEos) {
+                    break
+                }
+            }
+
+            try {
+                decoder.stop()
+                decoder.release()
+            } catch (_: Exception) {}
+            extractor.release()
+
+            Log.i(TAG, "PCM decodificado com sucesso (${decodedList.size} amostras) de $sourcePathOrUri")
+            decodedList.toShortArray()
+        } catch (e: Exception) {
+            Log.w(TAG, "Não foi possível extrair PCM de $sourcePathOrUri: ${e.message}")
+            try { extractor.release() } catch (_: Exception) {}
+            null
+        }
+    }
+
+    /**
+     * Mixa amostras de áudio para um bloco de tempo a partir dos buffers PCM decodificados reais.
      */
     private fun mixPcmChunkAt(
         project: ProjectItem,
@@ -181,45 +346,66 @@ class AudioExportRenderer(
         samplesCount: Int,
         outShorts: ShortArray
     ) {
-        // Inicializa com silêncio
         java.util.Arrays.fill(outShorts, 0.toShort())
 
-        var hasAudioSource = false
         val mixAccumulatorL = IntArray(samplesCount)
         val mixAccumulatorR = IntArray(samplesCount)
 
-        // 1. Áudio das faixas externas
+        // 1. Faixas de áudio externas
         if (!project.isAudioMuted) {
             project.audios.forEach { track ->
                 if (!track.isMuted && track.volume > 0f) {
                     if (TimelineUtils.isAudioActiveAtTimelinePosition(track, timelineTimeMs)) {
-                        hasAudioSource = true
-                        val volume = track.volume.coerceIn(0f, 1f)
-                        applySyntheticToneOrSilence(
-                            timelineTimeMs = timelineTimeMs,
-                            samplesCount = samplesCount,
-                            volume = volume * 0.4f,
-                            accL = mixAccumulatorL,
-                            accR = mixAccumulatorR
-                        )
+                        val pcmData = decodedPcmCache[track.id]
+                        if (pcmData != null && pcmData.isNotEmpty()) {
+                            val offsetMs = timelineTimeMs - track.timelineStartMs + track.trimStartMs
+                            val effectiveMs = offsetMs.coerceAtLeast(0L)
+                            val startSampleIndex = ((effectiveMs * sampleRate) / 1000L).toInt() * 2 // estéreo
+                            val vol = track.volume.coerceIn(0f, 1f)
+
+                            for (i in 0 until samplesCount) {
+                                val idxL = startSampleIndex + i * 2
+                                val idxR = idxL + 1
+                                if (idxR < pcmData.size) {
+                                    mixAccumulatorL[i] += (pcmData[idxL] * vol).toInt()
+                                    mixAccumulatorR[i] += (pcmData[idxR] * vol).toInt()
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // 2. Áudio embutido dos clipes de vídeo
+        // 2. Áudio embutido dos clipes de vídeo principais
         if (!project.isVideoMuted) {
-            val activeClipInfo = TimelineUtils.findClipAtTimelinePosition(project.clips, timelineTimeMs)
-            if (activeClipInfo != null && activeClipInfo.clip.type == MediaType.VIDEO && !activeClipInfo.clip.isMuted && activeClipInfo.clip.volume > 0f) {
-                hasAudioSource = true
-                val volume = activeClipInfo.clip.volume.coerceIn(0f, 1f)
-                applySyntheticToneOrSilence(
-                    timelineTimeMs = timelineTimeMs,
-                    samplesCount = samplesCount,
-                    volume = volume * 0.4f,
-                    accL = mixAccumulatorL,
-                    accR = mixAccumulatorR
-                )
+            var accumulatedStartMs = 0L
+            for (clip in project.clips) {
+                val clipDuration = TimelineUtils.calculateClipTimelineDuration(clip)
+                val clipEndMs = accumulatedStartMs + clipDuration
+
+                if (timelineTimeMs in accumulatedStartMs until clipEndMs) {
+                    if (clip.type == MediaType.VIDEO && !clip.isMuted && clip.volume > 0f) {
+                        val pcmData = decodedPcmCache[clip.id]
+                        if (pcmData != null && pcmData.isNotEmpty()) {
+                            val offsetInClipMs = timelineTimeMs - accumulatedStartMs + clip.trimStartMs
+                            val effectiveMs = (offsetInClipMs * clip.speed).toLong().coerceAtLeast(0L)
+                            val startSampleIndex = ((effectiveMs * sampleRate) / 1000L).toInt() * 2
+                            val vol = clip.volume.coerceIn(0f, 1f)
+
+                            for (i in 0 until samplesCount) {
+                                val idxL = startSampleIndex + i * 2
+                                val idxR = idxL + 1
+                                if (idxR < pcmData.size) {
+                                    mixAccumulatorL[i] += (pcmData[idxL] * vol).toInt()
+                                    mixAccumulatorR[i] += (pcmData[idxR] * vol).toInt()
+                                }
+                            }
+                        }
+                    }
+                    break
+                }
+                accumulatedStartMs = clipEndMs
             }
         }
 
@@ -229,25 +415,6 @@ class AudioExportRenderer(
             val sampleR = mixAccumulatorR[i].coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
             outShorts[i * 2] = sampleL.toShort()
             outShorts[i * 2 + 1] = sampleR.toShort()
-        }
-    }
-
-    private fun applySyntheticToneOrSilence(
-        timelineTimeMs: Long,
-        samplesCount: Int,
-        volume: Float,
-        accL: IntArray,
-        accR: IntArray
-    ) {
-        // Gera onda senoidal ambiente suave de 440Hz suave para faixas ativas caso não haja PCM bruto
-        val freq = 440.0
-        val basePhase = (timelineTimeMs * 0.001 * freq * 2.0 * Math.PI)
-        val phaseStep = (freq * 2.0 * Math.PI) / sampleRate
-
-        for (i in 0 until samplesCount) {
-            val sampleValue = (Math.sin(basePhase + i * phaseStep) * 4000.0 * volume).toInt()
-            accL[i] += sampleValue
-            accR[i] += sampleValue
         }
     }
 }

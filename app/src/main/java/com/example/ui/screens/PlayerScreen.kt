@@ -84,11 +84,12 @@ fun PlayerScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Compartilhar
+                    val exportPath = uiState.lastExportedFilePath ?: project?.lastExportedPath
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .clickable {
-                                uiState.lastExportedFilePath?.let { path ->
+                                exportPath?.let { path ->
                                     viewModel.shareVideo(context, path)
                                 } ?: viewModel.setFeedback("Exporte o vídeo antes de compartilhar.")
                             }

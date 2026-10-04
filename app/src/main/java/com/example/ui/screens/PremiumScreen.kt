@@ -35,6 +35,7 @@ fun PremiumScreen(
     onNavigateBack: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val plans by viewModel.premiumPlans.collectAsState()
     var selectedPlanIndex by remember { mutableIntStateOf(1) } // Default 1: Anual (Mais popular)
     var showSuccessDialog by remember { mutableStateOf(false) }
 
@@ -43,12 +44,6 @@ fun PremiumScreen(
         "Acesso a todos os efeitos",
         "Modelos premium",
         "Atualizações futuras"
-    )
-
-    val plans = listOf(
-        Triple("R$ 9,90", "/ mês", ""),
-        Triple("R$ 49,90", "/ ano", "Mais popular"),
-        Triple("R$ 99,90", "/ vitalício", "")
     )
 
     Scaffold(
@@ -175,9 +170,9 @@ fun PremiumScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                plans.forEachIndexed { index, (price, period, badge) ->
+                plans.forEachIndexed { index, plan ->
                     val isSelected = selectedPlanIndex == index
-                    val isPopular = badge.isNotBlank()
+                    val isPopular = plan.tag.isNotBlank() || plan.isPopular
 
                     Surface(
                         shape = RoundedCornerShape(16.dp),
@@ -220,14 +215,14 @@ fun PremiumScreen(
 
                                 Row(verticalAlignment = Alignment.Bottom) {
                                     Text(
-                                        text = price,
+                                        text = plan.price,
                                         fontSize = 17.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = TextPrimary
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = period,
+                                        text = plan.period,
                                         fontSize = 14.sp,
                                         color = TextSecondary
                                     )
@@ -240,7 +235,7 @@ fun PremiumScreen(
                                     color = PrimaryPurple
                                 ) {
                                     Text(
-                                        text = badge,
+                                        text = plan.tag.ifBlank { "Popular" },
                                         color = Color.White,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,

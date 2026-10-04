@@ -7,6 +7,7 @@ import com.example.BotiApplication
 import com.example.data.repository.ProjectRepository
 import com.example.model.*
 import com.example.util.TimelineUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.ArrayDeque
 import java.util.UUID
 
@@ -75,9 +77,52 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     val playerManager: com.example.player.EditorPlayerManager = com.example.player.EditorPlayerManager(application, viewModelScope)
     val waveformGenerator: com.example.data.audio.WaveformGenerator = com.example.data.audio.WaveformGenerator(application)
     val exportManager: com.example.export.VideoExportManager = com.example.export.VideoExportManager(application)
+    private val templateRepository = com.example.data.repository.TemplateRepository()
 
     private val _uiState = MutableStateFlow(EditorUiState())
     val uiState: StateFlow<EditorUiState> = _uiState.asStateFlow()
+
+    // Tamanho do cache real do aplicativo (calculado via Dispatchers.IO)
+    private val _cacheSizeMb = MutableStateFlow("Calculando...")
+    val cacheSizeMb: StateFlow<String> = _cacheSizeMb.asStateFlow()
+
+    // Planos de assinatura consumidos dinamicamente (prontos para Google Play Billing)
+    private val _premiumPlans = MutableStateFlow(
+        listOf(
+            PremiumProductPlan(
+                id = "boti_premium_monthly",
+                title = "Mensal",
+                price = "R$ 9,90",
+                period = "/ mês",
+                tag = "",
+                isPopular = false,
+                priceInCents = 990
+            ),
+            PremiumProductPlan(
+                id = "boti_premium_annual",
+                title = "Anual",
+                price = "R$ 49,90",
+                period = "/ ano",
+                tag = "Mais popular",
+                isPopular = true,
+                priceInCents = 4990
+            ),
+            PremiumProductPlan(
+                id = "boti_premium_lifetime",
+                title = "Vitalício",
+                price = "R$ 99,90",
+                period = "/ vitalício",
+                tag = "Melhor valor",
+                isPopular = false,
+                priceInCents = 9990
+            )
+        )
+    )
+    val premiumPlans: StateFlow<List<PremiumProductPlan>> = _premiumPlans.asStateFlow()
+
+    // Lista de templates carregados dinamicamente via Repository
+    private val _templates = MutableStateFlow<List<VideoTemplateItem>>(emptyList())
+    val templates: StateFlow<List<VideoTemplateItem>> = _templates.asStateFlow()
 
     private var exportJob: Job? = null
 
@@ -87,9 +132,26 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val MAX_HISTORY_SIZE = 20
 
     init {
-        viewModelScope.launch {
+        // Inicialização estritamente em background IO para não bloquear Splash ou UI
+        viewModelScope.launch(Dispatchers.IO) {
             repository.seedInitialDataIfNeeded()
             _uiState.update { it.copy(isDatabaseInitialized = true) }
+            calculateAppCacheSize()
+            loadTemplates()
+
+            // Restaura caminho persistido do último vídeo exportado caso ocorra recreation de processo
+            val savedExportPath = repository.getLastExportedPath(null)
+            if (!savedExportPath.isNullOrBlank()) {
+                val f = File(savedExportPath)
+                if (f.exists()) {
+                    _uiState.update {
+                        it.copy(
+                            lastExportedFilePath = savedExportPath,
+                            lastExportedFile = f.name
+                        )
+                    }
+                }
+            }
         }
 
         viewModelScope.launch {
@@ -1691,13 +1753,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 )
 
                 if (result.success && result.outputFile != null) {
+                    val path = result.outputFile.absolutePath
+                    repository.saveLastExportedPath(current.id, path)
                     _uiState.update {
                         it.copy(
                             isExporting = false,
                             exportSuccess = true,
                             exportProgress = 1.0f,
                             lastExportedFile = result.outputFile.name,
-                            lastExportedFilePath = result.outputFile.absolutePath,
+                            lastExportedFilePath = path,
                             exportStatusMessage = "Vídeo MP4 salvo com sucesso!"
                         )
                     }
@@ -1804,6 +1868,82 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             delay(3000)
             _uiState.update { if (it.feedbackMessage == msg) it.copy(feedbackMessage = null) else it }
+        }
+    }
+
+    /**
+     * Calcula o tamanho real do cache de arquivos temporários do aplicativo em background (Dispatchers.IO).
+     */
+    fun calculateAppCacheSize() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val cacheDir = app.cacheDir
+            val extCacheDir = app.externalCacheDir
+            val exportsDir = File(app.filesDir, "exports")
+
+            var totalBytes = calculateDirSize(cacheDir)
+            if (extCacheDir != null) {
+                totalBytes += calculateDirSize(extCacheDir)
+            }
+            if (exportsDir.exists()) {
+                totalBytes += calculateDirSize(exportsDir)
+            }
+
+            val formatted = when {
+                totalBytes <= 0L -> "0 MB"
+                totalBytes < 1024L * 1024L -> String.format("%.1f KB", totalBytes / 1024.0)
+                else -> String.format("%.1f MB", totalBytes / (1024.0 * 1024.0))
+            }
+            _cacheSizeMb.value = formatted
+        }
+    }
+
+    private fun calculateDirSize(dir: File?): Long {
+        if (dir == null || !dir.exists()) return 0L
+        var size = 0L
+        dir.listFiles()?.forEach { file ->
+            size += if (file.isDirectory) calculateDirSize(file) else file.length()
+        }
+        return size
+    }
+
+    /**
+     * Limpa os arquivos temporários reais do cache do aplicativo e recalcula o tamanho.
+     */
+    fun clearAppCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            deleteDirContents(app.cacheDir)
+            app.externalCacheDir?.let { deleteDirContents(it) }
+
+            calculateAppCacheSize()
+            setFeedback("Cache temporário limpo com sucesso!")
+        }
+    }
+
+    private fun deleteDirContents(dir: File?) {
+        if (dir == null || !dir.exists()) return
+        dir.listFiles()?.forEach { file ->
+            if (file.isDirectory) {
+                deleteDirContents(file)
+                file.delete()
+            } else {
+                file.delete()
+            }
+        }
+    }
+
+    /**
+     * Carrega modelos da camada de TemplateRepository simulando consumo de API.
+     */
+    fun loadTemplates() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val list = templateRepository.getTemplates()
+                _templates.value = list
+            } catch (e: Exception) {
+                android.util.Log.w("EditorViewModel", "Falha ao carregar templates: ${e.message}")
+            }
         }
     }
 }

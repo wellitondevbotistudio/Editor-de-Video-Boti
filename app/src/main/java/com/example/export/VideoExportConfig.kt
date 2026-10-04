@@ -35,10 +35,12 @@ data class VideoExportConfig(
 ) {
     /**
      * Calcula as dimensões exatas de largura e altura baseadas na resolução e proporção.
+     * Garante estritamente que largura e altura sejam números pares (divisíveis por 2)
+     * para prevenir falhas, corrupção ou travamentos no encoder H.264/AVC.
      */
     val dimensions: Pair<Int, Int>
         get() {
-            return when (aspectRatio) {
+            val raw = when (aspectRatio) {
                 AspectRatio.RATIO_16_9 -> when (resolution) {
                     ExportResolution.RES_720P -> 1280 to 720
                     ExportResolution.RES_1080P -> 1920 to 1080
@@ -65,7 +67,19 @@ data class VideoExportConfig(
                     ExportResolution.RES_4K -> 2880 to 2160
                 }
             }
+            return sanitizeEvenDimension(raw.first) to sanitizeEvenDimension(raw.second)
         }
+
+    companion object {
+        /**
+         * Sanitiza qualquer dimensão para que seja par (múltiplo de 2) e >= 2,
+         * requisito obrigatório de subsampling de croma YUV420p em H.264/H.265.
+         */
+        fun sanitizeEvenDimension(dim: Int): Int {
+            val even = (dim / 2) * 2
+            return if (even < 2) 2 else even
+        }
+    }
 
     val width: Int get() = dimensions.first
     val height: Int get() = dimensions.second

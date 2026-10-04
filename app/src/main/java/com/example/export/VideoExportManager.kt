@@ -6,12 +6,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import com.example.model.ProjectItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 
 /**
  * Gerenciador principal de exportação do aplicativo Boti Video Editor.
@@ -20,6 +22,9 @@ import java.io.FileOutputStream
 class VideoExportManager(
     private val context: Context
 ) {
+    companion object {
+        private const val TAG = "VideoExportManager"
+    }
 
     /**
      * Exporta o projeto de edição para um arquivo MP4 real de alta definição.
@@ -118,7 +123,11 @@ class VideoExportManager(
 
         val uri = try {
             resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
-        } catch (_: Exception) {
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Falha de segurança/permissão ao inserir no MediaStore: ${e.message}", e)
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro inesperado ao registrar no MediaStore: ${e.message}", e)
             null
         }
 
@@ -129,18 +138,29 @@ class VideoExportManager(
                     FileInputStream(file).use { input ->
                         input.copyTo(out)
                     }
-                }
+                } ?: throw IOException("Não foi possível abrir o OutputStream para a URI: $uri")
+
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     contentValues.clear()
                     contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
                     resolver.update(uri, contentValues, null, null)
                 }
                 success = true
-            } catch (_: Exception) {
-                // Se falhar a cópia, remove entrada corrompida do MediaStore
+                Log.i(TAG, "Vídeo registrado com sucesso no MediaStore Scoped Storage: $uri")
+            } catch (e: IOException) {
+                Log.e(TAG, "Erro de I/O ao copiar arquivo exportado para o MediaStore: ${e.message}", e)
                 try {
                     resolver.delete(uri, null, null)
-                } catch (_: Exception) {}
+                } catch (delEx: Exception) {
+                    Log.w(TAG, "Falha ao remover URI corrompida após erro de I/O: ${delEx.message}")
+                }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Permissão negada ao gravar dados no MediaStore: ${e.message}", e)
+                try {
+                    resolver.delete(uri, null, null)
+                } catch (delEx: Exception) {
+                    Log.w(TAG, "Falha ao remover URI após SecurityException: ${delEx.message}")
+                }
             }
             if (!success) {
                 return null

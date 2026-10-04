@@ -33,10 +33,14 @@ fun SettingsScreen(
     onNavigateToPremium: () -> Unit = {}
 ) {
     var autoSave by remember { mutableStateOf(true) }
-    var cacheSizeMb by remember { mutableStateOf("42.8 MB") }
+    val cacheSizeMb by viewModel.cacheSizeMb.collectAsState()
     var showPrivacyDialog by remember { mutableStateOf(false) }
     var showRatingDialog by remember { mutableStateOf(false) }
     val uiState by viewModel.uiState.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.calculateAppCacheSize()
+    }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -139,8 +143,7 @@ fun SettingsScreen(
                         value = cacheSizeMb,
                         onClick = {
                             if (cacheSizeMb != "0 MB") {
-                                cacheSizeMb = "0 MB"
-                                viewModel.setFeedback("Cache limpo! Espaço em disco liberado.")
+                                viewModel.clearAppCache()
                             } else {
                                 viewModel.setFeedback("Cache já está limpo.")
                             }
