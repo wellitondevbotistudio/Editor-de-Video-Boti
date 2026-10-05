@@ -414,7 +414,9 @@ fun VfxEntity.toDomain(): VFXEffectItem {
         intensity = intensity,
         isPremium = isPremium,
         clipId = clipId,
-        isEnabled = isEnabled
+        isEnabled = isEnabled,
+        startTimeMs = startTimeMs,
+        durationMs = durationMs
     )
 }
 
@@ -596,6 +598,8 @@ fun VFXEffectItem.toEntity(projectId: String): VfxEntity {
         intensity = intensity,
         isPremium = isPremium,
         clipId = clipId,
-        isEnabled = isEnabled
+        isEnabled = isEnabled,
+        startTimeMs = startTimeMs,
+        durationMs = durationMs
     )
 }

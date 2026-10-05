@@ -65,6 +65,7 @@ data class EditorUiState(
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val selectedAudioTrackId: String? = null,
+    val selectedVfxId: String? = null,
     val waveforms: Map<String, List<Float>> = emptyMap()
 )
 
@@ -188,10 +189,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                             updatedCurrent.audios,
                             updatedCurrent.texts,
                             updatedCurrent.stickers,
+                            updatedCurrent.activeVFX,
                             initialSeekPlayhead = state.currentPositionMs
                         )
                     } else {
-                        playerManager.setClipsAndAudios(emptyList(), emptyList(), emptyList(), emptyList())
+                        playerManager.setClipsAndAudios(emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
                     }
 
                     state.copy(
@@ -269,6 +271,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             project.audios,
             project.texts,
             project.stickers,
+            project.activeVFX,
             initialSeekPlayhead = clampedPlayhead
         )
         playerManager.exoPlayer.volume = if (project.isVideoMuted) 0f else 1f
@@ -359,7 +362,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 selectedClipId = clipId,
                 selectedTextId = if (clipId != null) null else it.selectedTextId,
                 selectedStickerId = if (clipId != null) null else it.selectedStickerId,
-                selectedAudioTrackId = if (clipId != null) null else it.selectedAudioTrackId
+                selectedAudioTrackId = if (clipId != null) null else it.selectedAudioTrackId,
+                selectedVfxId = if (clipId != null) null else it.selectedVfxId
             )
         }
         if (seekToClipStart && clipId != null) {
@@ -372,13 +376,39 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun selectVFX(vfxId: String?) {
+        _uiState.update {
+            it.copy(
+                selectedVfxId = vfxId,
+                selectedClipId = if (vfxId != null) null else it.selectedClipId,
+                selectedTextId = if (vfxId != null) null else it.selectedTextId,
+                selectedStickerId = if (vfxId != null) null else it.selectedStickerId,
+                selectedAudioTrackId = if (vfxId != null) null else it.selectedAudioTrackId
+            )
+        }
+    }
+
+    fun updateVfxTiming(vfxId: String, newStartMs: Long, newDurationMs: Long? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.activeVFX.map {
+            if (it.id == vfxId) {
+                it.copy(
+                    startTimeMs = newStartMs.coerceAtLeast(0L),
+                    durationMs = (newDurationMs ?: it.durationMs).coerceAtLeast(200L)
+                )
+            } else it
+        }
+        commitProjectChange(cur.copy(activeVFX = updated))
+    }
+
     fun clearAllSelections() {
         _uiState.update {
             it.copy(
                 selectedClipId = null,
                 selectedTextId = null,
                 selectedStickerId = null,
-                selectedAudioTrackId = null
+                selectedAudioTrackId = null,
+                selectedVfxId = null
             )
         }
     }
@@ -394,6 +424,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             project.audios,
             project.texts,
             project.stickers,
+            project.activeVFX,
             initialSeekPlayhead = 0L
         )
         playerManager.exoPlayer.volume = if (project.isVideoMuted) 0f else 1f
@@ -407,6 +438,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 selectedTextId = null,
                 selectedStickerId = null,
                 selectedAudioTrackId = null,
+                selectedVfxId = null,
                 activePanel = ToolPanel.NONE
             )
         }
@@ -652,11 +684,37 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun splitSelectedElementAtPlayhead() {
         val state = _uiState.value
         when {
+            state.selectedVfxId != null -> splitVfxAtPlayhead(state.selectedVfxId)
             state.selectedStickerId != null -> splitStickerAtPlayhead(state.selectedStickerId)
             state.selectedTextId != null -> splitTextOverlayAtPlayhead(state.selectedTextId)
             state.selectedAudioTrackId != null -> splitAudioTrackAtPlayhead(state.selectedAudioTrackId)
             else -> splitMainClipAtPlayhead()
         }
+    }
+
+    private fun splitVfxAtPlayhead(vfxId: String) {
+        val cur = _uiState.value.currentProject ?: return
+        val vfx = cur.activeVFX.find { it.id == vfxId } ?: return
+        val playhead = _uiState.value.currentPositionMs
+        val vfxStart = vfx.startTimeMs
+        val vfxEnd = vfxStart + vfx.durationMs
+
+        if (playhead <= vfxStart + 200L || playhead >= vfxEnd - 200L) {
+            setFeedback("Não é possível dividir muito próximo das bordas do efeito.")
+            return
+        }
+
+        val part1Duration = playhead - vfxStart
+        val part2Duration = vfxEnd - playhead
+        val part1 = vfx.copy(durationMs = part1Duration)
+        val part2 = vfx.copy(id = "vfx_${java.util.UUID.randomUUID().toString().take(6)}", startTimeMs = playhead, durationMs = part2Duration)
+
+        val updated = cur.activeVFX.flatMap {
+            if (it.id == vfxId) listOf(part1, part2) else listOf(it)
+        }
+        commitProjectChange(cur.copy(activeVFX = updated))
+        _uiState.update { it.copy(selectedVfxId = part2.id) }
+        setFeedback("Efeito VFX dividido com precisão")
     }
 
     fun splitClipAtPlayhead() {
@@ -877,6 +935,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun deleteSelectedElement() {
         val state = _uiState.value
         when {
+            state.selectedVfxId != null -> {
+                val cur = _uiState.value.currentProject ?: return
+                val updated = cur.activeVFX.filterNot { it.id == state.selectedVfxId }
+                commitProjectChange(cur.copy(activeVFX = updated))
+                _uiState.update { it.copy(selectedVfxId = null) }
+                setFeedback("Efeito VFX removido")
+            }
             state.selectedStickerId != null -> removeSticker(state.selectedStickerId)
             state.selectedTextId != null -> removeTextOverlay(state.selectedTextId)
             state.selectedAudioTrackId != null -> removeAudioTrack(state.selectedAudioTrackId)
@@ -1636,7 +1701,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val updated = if (exists) {
             cur.activeVFX.filterNot { it.id == vfx.id }
         } else {
-            cur.activeVFX + vfx
+            val startMs = _uiState.value.currentPositionMs
+            val newVfx = vfx.copy(startTimeMs = startMs, durationMs = 3000L)
+            cur.activeVFX + newVfx
         }
         commitProjectChange(cur.copy(activeVFX = updated))
         setFeedback(if (!exists) "Efeito '${vfx.name}' ativado" else "Efeito '${vfx.name}' desativado")
@@ -1696,7 +1763,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             project.clips,
             project.audios,
             project.texts,
-            project.stickers
+            project.stickers,
+            project.activeVFX
         )
         playerManager.setLayerMuteState(project.isVideoMuted, project.isAudioMuted)
         loadWaveformsForProject(project)

@@ -434,22 +434,87 @@ fun EditorScreen(
                 val isLandscape = availableWidth > availableHeight
                 val isCompactHeight = availableHeight < 680.dp
                 val isSmallScreen = availableHeight < 720.dp || availableWidth < 360.dp
-                val isPanelOpen = uiState.activePanel != ToolPanel.NONE || (uiState.selectedClipId != null && uiState.activePanel == ToolPanel.NONE)
+                val isAnyElementSelected = uiState.selectedClipId != null ||
+                        uiState.selectedTextId != null ||
+                        uiState.selectedStickerId != null ||
+                        uiState.selectedAudioTrackId != null ||
+                        uiState.selectedVfxId != null
+                val isPanelOpen = uiState.activePanel != ToolPanel.NONE || (isAnyElementSelected && uiState.activePanel == ToolPanel.NONE)
 
                 val timelineMinHeight = when {
-                    isCompactHeight -> 140.dp
-                    isSmallScreen -> 160.dp
-                    else -> 190.dp
+                    isCompactHeight -> 110.dp
+                    isSmallScreen -> 130.dp
+                    else -> 155.dp
                 }
 
                 val maxPanelHeight = when {
-                    isCompactHeight -> 135.dp
-                    isSmallScreen -> 160.dp
-                    else -> 195.dp
+                    isCompactHeight -> 115.dp
+                    isSmallScreen -> 135.dp
+                    else -> 160.dp
                 }
 
                 val displayPosition = if (isScrubbing) scrubPositionMs.toLong() else uiState.currentPositionMs
-                val showEditTools = uiState.activePanel == ToolPanel.EDIT_TOOLS || (uiState.selectedClipId != null && uiState.activePanel == ToolPanel.NONE)
+                val showEditTools = uiState.activePanel == ToolPanel.EDIT_TOOLS || (isAnyElementSelected && uiState.activePanel == ToolPanel.NONE)
+
+                val (editPanelTitle, dynamicEditTools) = remember(
+                    uiState.selectedClipId,
+                    uiState.selectedTextId,
+                    uiState.selectedStickerId,
+                    uiState.selectedAudioTrackId,
+                    uiState.selectedVfxId
+                ) {
+                    when {
+                        uiState.selectedTextId != null -> {
+                            "Editar Texto" to listOf(
+                                Triple("Editar", Icons.Default.Edit) { viewModel.setActivePanel(ToolPanel.TEXT) },
+                                Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitSelectedElementAtPlayhead() },
+                                Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) },
+                                Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateSelectedElement() },
+                                Triple("Estilo", Icons.Default.Palette) { viewModel.setActivePanel(ToolPanel.TEXT) }
+                            )
+                        }
+                        uiState.selectedStickerId != null -> {
+                            "Editar Sobreposição" to listOf(
+                                Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) },
+                                Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateSelectedElement() },
+                                Triple("Girar", Icons.Default.RotateRight) {
+                                    val s = project.stickers.find { it.id == uiState.selectedStickerId }
+                                    if (s != null) viewModel.updateStickerRotation(s.id, (s.rotation + 45f) % 360f)
+                                },
+                                Triple("Camada", Icons.Default.Layers) { viewModel.setActivePanel(ToolPanel.STICKER) }
+                            )
+                        }
+                        uiState.selectedAudioTrackId != null -> {
+                            "Editar Áudio" to listOf(
+                                Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitSelectedElementAtPlayhead() },
+                                Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) },
+                                Triple("Volume", Icons.Default.VolumeUp) { viewModel.setActivePanel(ToolPanel.AUDIO) },
+                                Triple("Velocidade", Icons.Default.Speed) { viewModel.setActivePanel(ToolPanel.SPEED) },
+                                Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateSelectedElement() }
+                            )
+                        }
+                        uiState.selectedVfxId != null -> {
+                            "Editar Efeito VFX" to listOf(
+                                Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitSelectedElementAtPlayhead() },
+                                Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) },
+                                Triple("Intensidade", Icons.Default.Tune) { viewModel.setActivePanel(ToolPanel.VFX) }
+                            )
+                        }
+                        else -> {
+                            "Editar Clipe" to listOf(
+                                Triple("Cortar", Icons.Default.ContentCut) { viewModel.setActivePanel(ToolPanel.TRIM) },
+                                Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitSelectedElementAtPlayhead() },
+                                Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) },
+                                Triple("Velocidade", Icons.Default.Speed) { viewModel.setActivePanel(ToolPanel.SPEED) },
+                                Triple("Volume", Icons.Default.VolumeUp) { viewModel.setActivePanel(ToolPanel.AUDIO) },
+                                Triple("Ajustes", Icons.Default.Tune) { viewModel.setActivePanel(ToolPanel.ADJUST) },
+                                Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateSelectedElement() },
+                                Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CROP) },
+                                Triple("Opacidade", Icons.Default.Opacity) { viewModel.setActivePanel(ToolPanel.TRANSFORM) }
+                            )
+                        }
+                    }
+                }
 
                 if (!isLandscape) {
                     // DISPOSIÇÃO VERTICAL (PORTRAIT):
@@ -466,8 +531,8 @@ fun EditorScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(if (isPanelOpen) 0.85f else 1.15f)
-                                .heightIn(min = if (isCompactHeight) 120.dp else 150.dp)
+                                .weight(if (isPanelOpen) 1.0f else 1.3f)
+                                .heightIn(min = if (isCompactHeight) 110.dp else 140.dp)
                                 .background(Color.Black),
                             contentAlignment = Alignment.Center
                         ) {
@@ -626,7 +691,7 @@ fun EditorScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(1f)
+                                .weight(if (isPanelOpen) 0.95f else 1.0f)
                                 .heightIn(min = timelineMinHeight)
                                 .background(Color(0xFF0F0F14))
                         ) {
@@ -639,10 +704,12 @@ fun EditorScreen(
                                 selectedAudioId = uiState.selectedAudioTrackId,
                                 selectedTextId = uiState.selectedTextId,
                                 selectedStickerId = uiState.selectedStickerId,
+                                selectedVfxId = uiState.selectedVfxId,
                                 waveforms = uiState.waveforms,
                                 canUndo = uiState.canUndo,
                                 canRedo = uiState.canRedo,
                                 onSeek = { viewModel.seekTo(it) },
+                                onDragStart = { viewModel.pausePlayback() },
                                 onSelectClip = { clipId ->
                                     viewModel.selectClip(clipId, seekToClipStart = false)
                                     viewModel.setActivePanel(ToolPanel.EDIT_TOOLS)
@@ -658,6 +725,10 @@ fun EditorScreen(
                                 onSelectSticker = { stickerId ->
                                     viewModel.selectSticker(stickerId)
                                     viewModel.setActivePanel(ToolPanel.STICKER)
+                                },
+                                onSelectVfx = { vfxId ->
+                                    viewModel.selectVFX(vfxId)
+                                    viewModel.setActivePanel(ToolPanel.NONE)
                                 },
                                 onSplitClip = { viewModel.splitSelectedElementAtPlayhead() },
                                 onDeleteSelected = { viewModel.deleteSelectedElement() },
@@ -690,6 +761,9 @@ fun EditorScreen(
                                 onMoveAudio = { audioId, newStart ->
                                     viewModel.updateAudioTrackPosition(audioId, newStart)
                                 },
+                                onMoveVfx = { vfxId, newStart ->
+                                    viewModel.updateVfxTiming(vfxId, newStart)
+                                },
                                 onAddOverlay = {
                                     overlayPickerLauncher.launch(
                                         androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
@@ -711,6 +785,7 @@ fun EditorScreen(
                                 onTrimSticker = { id, s, d -> viewModel.updateStickerTiming(id, s, d) },
                                 onTrimText = { id, s, d -> viewModel.updateTextOverlayTiming(id, s, d) },
                                 onTrimAudio = { id, s, e -> viewModel.updateAudioTrackTrim(id, s, e) },
+                                onTrimVfx = { id, s, d -> viewModel.updateVfxTiming(id, s, d) },
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -730,7 +805,7 @@ fun EditorScreen(
                                         .heightIn(min = 86.dp, max = maxPanelHeight)
                                         .padding(horizontal = 12.dp, vertical = 6.dp)
                                 ) {
-                                    // Header: '<' Voltar | "Editar Clipe" | 'v' Confirmar
+                                    // Header: '<' Voltar | Dynamic Title | 'v' Confirmar
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -739,14 +814,14 @@ fun EditorScreen(
                                         IconButton(
                                             onClick = {
                                                 viewModel.setActivePanel(ToolPanel.NONE)
-                                                viewModel.selectClip(null)
+                                                viewModel.clearAllSelections()
                                             },
                                             modifier = Modifier.size(32.dp).testTag("panel_back_button")
                                         ) {
                                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = Color.White, modifier = Modifier.size(20.dp))
                                         }
                                         Text(
-                                            text = "Editar Clipe",
+                                            text = editPanelTitle,
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = TextPrimary
@@ -754,7 +829,7 @@ fun EditorScreen(
                                         IconButton(
                                             onClick = {
                                                 viewModel.setActivePanel(ToolPanel.NONE)
-                                                viewModel.selectClip(null)
+                                                viewModel.clearAllSelections()
                                             },
                                             modifier = Modifier.size(32.dp).testTag("panel_confirm_button")
                                         ) {
@@ -764,28 +839,13 @@ fun EditorScreen(
 
                                     Spacer(modifier = Modifier.height(4.dp))
 
-                                    val editTools = listOf(
-                                        Triple("Cortar", Icons.Default.ContentCut) { viewModel.setActivePanel(ToolPanel.TRIM) },
-                                        Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitSelectedElementAtPlayhead() },
-                                        Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) },
-                                        Triple("Velocidade", Icons.Default.Speed) { viewModel.setActivePanel(ToolPanel.SPEED) },
-                                        Triple("Volume", Icons.Default.VolumeUp) { viewModel.setActivePanel(ToolPanel.AUDIO) },
-                                        Triple("Ajustes", Icons.Default.Tune) { viewModel.setActivePanel(ToolPanel.ADJUST) },
-                                        Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateSelectedElement() },
-                                        Triple("Inverter", Icons.Default.Refresh) { viewModel.setFeedback("Efeito reverso aplicado ao clipe.") },
-                                        Triple("Congelar", Icons.Default.AcUnit) { viewModel.setFeedback("Quadro congelado criado na linha do tempo.") },
-                                        Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CROP) },
-                                        Triple("Substituir", Icons.Default.SwapHoriz) { onNavigateToImport() },
-                                        Triple("Opacidade", Icons.Default.Opacity) { viewModel.setActivePanel(ToolPanel.TRANSFORM) }
-                                    )
-
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .horizontalScroll(rememberScrollState()),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        editTools.forEach { (label, icon, action) ->
+                                        dynamicEditTools.forEach { (label, icon, action) ->
                                             Surface(
                                                 shape = RoundedCornerShape(10.dp),
                                                 color = SurfaceDark,
@@ -1078,10 +1138,12 @@ fun EditorScreen(
                                     selectedAudioId = uiState.selectedAudioTrackId,
                                     selectedTextId = uiState.selectedTextId,
                                     selectedStickerId = uiState.selectedStickerId,
+                                    selectedVfxId = uiState.selectedVfxId,
                                     waveforms = uiState.waveforms,
                                     canUndo = uiState.canUndo,
                                     canRedo = uiState.canRedo,
                                     onSeek = { viewModel.seekTo(it) },
+                                    onDragStart = { viewModel.pausePlayback() },
                                     onSelectClip = { clipId ->
                                         viewModel.selectClip(clipId, seekToClipStart = false)
                                         viewModel.setActivePanel(ToolPanel.EDIT_TOOLS)
@@ -1097,6 +1159,10 @@ fun EditorScreen(
                                     onSelectSticker = { stickerId ->
                                         viewModel.selectSticker(stickerId)
                                         viewModel.setActivePanel(ToolPanel.STICKER)
+                                    },
+                                    onSelectVfx = { vfxId ->
+                                        viewModel.selectVFX(vfxId)
+                                        viewModel.setActivePanel(ToolPanel.NONE)
                                     },
                                     onSplitClip = { viewModel.splitSelectedElementAtPlayhead() },
                                     onDeleteSelected = { viewModel.deleteSelectedElement() },
@@ -1129,6 +1195,9 @@ fun EditorScreen(
                                     onMoveAudio = { audioId, newStart ->
                                         viewModel.updateAudioTrackPosition(audioId, newStart)
                                     },
+                                    onMoveVfx = { vfxId, newStart ->
+                                        viewModel.updateVfxTiming(vfxId, newStart)
+                                    },
                                     onAddOverlay = {
                                         overlayPickerLauncher.launch(
                                             androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
@@ -1138,6 +1207,7 @@ fun EditorScreen(
                                     onTrimSticker = { id, s, d -> viewModel.updateStickerTiming(id, s, d) },
                                     onTrimText = { id, s, d -> viewModel.updateTextOverlayTiming(id, s, d) },
                                     onTrimAudio = { id, s, e -> viewModel.updateAudioTrackTrim(id, s, e) },
+                                    onTrimVfx = { id, s, d -> viewModel.updateVfxTiming(id, s, d) },
                                     onClearSelection = { viewModel.clearAllSelections() },
                                     onToggleTextLock = { viewModel.toggleTextLock() },
                                     onToggleTextVisibility = { viewModel.toggleTextVisibility() },
@@ -1177,17 +1247,17 @@ fun EditorScreen(
                                             IconButton(
                                                 onClick = {
                                                     viewModel.setActivePanel(ToolPanel.NONE)
-                                                    viewModel.selectClip(null)
+                                                    viewModel.clearAllSelections()
                                                 },
                                                 modifier = Modifier.size(28.dp).testTag("panel_back_button")
                                             ) {
                                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = Color.White, modifier = Modifier.size(18.dp))
                                             }
-                                            Text("Editar Clipe", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                            Text(editPanelTitle, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
                                             IconButton(
                                                 onClick = {
                                                     viewModel.setActivePanel(ToolPanel.NONE)
-                                                    viewModel.selectClip(null)
+                                                    viewModel.clearAllSelections()
                                                 },
                                                 modifier = Modifier.size(28.dp).testTag("panel_confirm_button")
                                             ) {
@@ -1200,17 +1270,7 @@ fun EditorScreen(
                                                 .horizontalScroll(rememberScrollState()),
                                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            val editTools = listOf(
-                                                Triple("Cortar", Icons.Default.ContentCut) { viewModel.setActivePanel(ToolPanel.TRIM) },
-                                                Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitClipAtPlayhead() },
-                                                Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedClip(); viewModel.setActivePanel(ToolPanel.NONE) },
-                                                Triple("Velocidade", Icons.Default.Speed) { viewModel.setActivePanel(ToolPanel.SPEED) },
-                                                Triple("Volume", Icons.Default.VolumeUp) { viewModel.setActivePanel(ToolPanel.AUDIO) },
-                                                Triple("Ajustes", Icons.Default.Tune) { viewModel.setActivePanel(ToolPanel.ADJUST) },
-                                                Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CROP) },
-                                                Triple("Opacidade", Icons.Default.Opacity) { viewModel.setActivePanel(ToolPanel.TRANSFORM) }
-                                            )
-                                            editTools.forEach { (label, icon, action) ->
+                                            dynamicEditTools.forEach { (label, icon, action) ->
                                                 Surface(
                                                     shape = RoundedCornerShape(8.dp),
                                                     color = SurfaceDark,
@@ -1502,25 +1562,6 @@ private fun VideoPreviewContent(
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 10.sp,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                )
-            }
-        }
-
-        // Play / Pause Overlay Button (only shown when no element is selected for manipulation)
-        if (!isClipSelected && !isAnyOverlaySelected) {
-            IconButton(
-                onClick = { viewModel.togglePlayback() },
-                modifier = Modifier
-                    .size(54.dp)
-                    .background(Color.Black.copy(alpha = 0.45f), CircleShape)
-                    .align(Alignment.Center)
-                    .testTag("play_pause_button")
-            ) {
-                Icon(
-                    imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
-                    tint = Color.White,
-                    modifier = Modifier.size(32.dp)
                 )
             }
         }

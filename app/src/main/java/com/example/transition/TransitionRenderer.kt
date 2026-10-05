@@ -42,7 +42,11 @@ fun TransitionAwareMediaSurface(
         return
     }
 
-    val effectiveVFX = if (isVfxVisible) activeVFX else emptyList()
+    val effectiveVFX = if (isVfxVisible) {
+        activeVFX.filter { effect ->
+            effect.isEnabled && currentPlayheadMs >= effect.startTimeMs && currentPlayheadMs < (effect.startTimeMs + effect.durationMs)
+        }
+    } else emptyList()
     val activeTransition = TransitionEngine.findActiveTransition(clips, currentPlayheadMs)
 
     Box(modifier = modifier.fillMaxSize().clipToBounds()) {

@@ -79,6 +79,16 @@ sealed class UnifiedOverlayItem {
         override val durationMs = textItem.durationMs
         override val name = textItem.text
     }
+
+    data class VfxOverlay(
+        val vfx: com.example.model.VFXEffectItem,
+        override val isSelected: Boolean
+    ) : UnifiedOverlayItem() {
+        override val id = vfx.id
+        override val startTimeMs = vfx.startTimeMs
+        override val durationMs = vfx.durationMs
+        override val name = vfx.name
+    }
 }
 
 /**
@@ -99,14 +109,18 @@ fun CapCutMultiTrackTimeline(
     selectedAudioId: String?,
     selectedTextId: String?,
     selectedStickerId: String?,
+    selectedVfxId: String? = null,
     waveforms: Map<String, List<Float>>,
     canUndo: Boolean,
     canRedo: Boolean,
     onSeek: (Long) -> Unit,
+    onDragStart: (() -> Unit)? = null,
+    onDragEnd: (() -> Unit)? = null,
     onSelectClip: (String) -> Unit,
     onSelectAudio: (String) -> Unit,
     onSelectText: (String) -> Unit,
     onSelectSticker: (String) -> Unit,
+    onSelectVfx: ((String) -> Unit)? = null,
     onSplitClip: () -> Unit,
     onDeleteSelected: () -> Unit,
     onUndo: () -> Unit,
@@ -122,6 +136,7 @@ fun CapCutMultiTrackTimeline(
     onMoveText: ((textId: String, newStartMs: Long) -> Unit)? = null,
     onMoveSticker: ((stickerId: String, newStartMs: Long) -> Unit)? = null,
     onMoveAudio: ((audioId: String, newStartMs: Long) -> Unit)? = null,
+    onMoveVfx: ((vfxId: String, newStartMs: Long) -> Unit)? = null,
     onReorderClip: ((fromIndex: Int, toIndex: Int) -> Unit)? = null,
     onAddOverlay: (() -> Unit)? = null,
     onClearSelection: (() -> Unit)? = null,
@@ -140,6 +155,7 @@ fun CapCutMultiTrackTimeline(
     onTrimSticker: ((stickerId: String, startMs: Long, durationMs: Long) -> Unit)? = null,
     onTrimText: ((textId: String, startMs: Long, durationMs: Long) -> Unit)? = null,
     onTrimAudio: ((audioId: String, trimStartMs: Long, trimEndMs: Long) -> Unit)? = null,
+    onTrimVfx: ((vfxId: String, startMs: Long, durationMs: Long) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var zoomScale by remember { mutableFloatStateOf(1.0f) }
@@ -163,11 +179,12 @@ fun CapCutMultiTrackTimeline(
         return ((ms / 1000f) * dpPerSecond).dp
     }
 
-    // Dynamic Layer Packing for all visual overlays (stickers, photos, videos, text)
-    val allOverlays = remember(project.stickers, project.texts, selectedStickerId, selectedTextId) {
+    // Dynamic Layer Packing for all visual overlays (stickers, photos, videos, text, VFX effects)
+    val allOverlays = remember(project.stickers, project.texts, project.activeVFX, selectedStickerId, selectedTextId, selectedVfxId) {
         val list = mutableListOf<UnifiedOverlayItem>()
         project.stickers.forEach { list.add(UnifiedOverlayItem.StickerOverlay(it, it.id == selectedStickerId)) }
         project.texts.forEach { list.add(UnifiedOverlayItem.TextOverlay(it, it.id == selectedTextId)) }
+        project.activeVFX.forEach { list.add(UnifiedOverlayItem.VfxOverlay(it, it.id == selectedVfxId)) }
         list
     }
 
@@ -322,13 +339,32 @@ fun CapCutMultiTrackTimeline(
                 }
             }
 
-            // Sync scroll if position changed externally while paused
+            // Sync scroll if position changed externally while paused (and not actively user scrubbing)
             LaunchedEffect(currentPositionMs) {
-                if (!isPlaying) {
+                if (!isPlaying && !horizontalScrollState.isScrollInProgress) {
                     val targetPx = with(density) { (currentPositionMs / 1000f * dpPerSecond).dp.toPx() }
                     if (Math.abs(horizontalScrollState.value - targetPx) > 15) {
                         horizontalScrollState.scrollTo(targetPx.roundToInt())
                     }
+                }
+            }
+
+            // Real-time timeline drag/scrub gestures: pause playback when scrolling begins and notify onDragEnd when stopped
+            LaunchedEffect(horizontalScrollState.isScrollInProgress) {
+                if (horizontalScrollState.isScrollInProgress) {
+                    onDragStart?.invoke()
+                } else {
+                    onDragEnd?.invoke()
+                }
+            }
+
+            // Continuous real-time bidirectional position update while dragging the timeline
+            LaunchedEffect(horizontalScrollState.value) {
+                if (horizontalScrollState.isScrollInProgress) {
+                    val targetMs = with(density) {
+                        ((horizontalScrollState.value.toDp().value / dpPerSecond) * 1000f).toLong().coerceIn(0L, safeTotalMs)
+                    }
+                    onSeek(targetMs)
                 }
             }
 
@@ -536,7 +572,9 @@ fun CapCutMultiTrackTimeline(
                                         dpPerSecond = dpPerSecond,
                                         zoomScale = zoomScale,
                                         widthDp = timelineContentWidthDp + 200.dp,
-                                        onSeek = onSeek
+                                        onSeek = onSeek,
+                                        onDragStart = onDragStart,
+                                        onDragEnd = onDragEnd
                                     )
                                 }
                             }
@@ -789,6 +827,7 @@ fun CapCutMultiTrackTimeline(
                                                             when (overlayItem) {
                                                                 is UnifiedOverlayItem.TextOverlay -> LayerTextBg
                                                                 is UnifiedOverlayItem.StickerOverlay -> LayerOverlayBg
+                                                                is UnifiedOverlayItem.VfxOverlay -> LayerVfxBg
                                                             }
                                                         )
                                                         .border(
@@ -796,6 +835,7 @@ fun CapCutMultiTrackTimeline(
                                                             color = if (isSelected) Color.White else when (overlayItem) {
                                                                 is UnifiedOverlayItem.TextOverlay -> LayerTextBorder
                                                                 is UnifiedOverlayItem.StickerOverlay -> AccentPink
+                                                                is UnifiedOverlayItem.VfxOverlay -> LayerVfxBorder
                                                             },
                                                             shape = RoundedCornerShape(6.dp)
                                                         )
@@ -812,6 +852,7 @@ fun CapCutMultiTrackTimeline(
                                                                         when (overlayItem) {
                                                                             is UnifiedOverlayItem.TextOverlay -> onSelectText(overlayItem.id)
                                                                             is UnifiedOverlayItem.StickerOverlay -> onSelectSticker(overlayItem.id)
+                                                                            is UnifiedOverlayItem.VfxOverlay -> onSelectVfx?.invoke(overlayItem.id)
                                                                         }
                                                                     }
                                                                 )
@@ -826,6 +867,7 @@ fun CapCutMultiTrackTimeline(
                                                                         when (overlayItem) {
                                                                             is UnifiedOverlayItem.TextOverlay -> onSelectText(overlayItem.id)
                                                                             is UnifiedOverlayItem.StickerOverlay -> onSelectSticker(overlayItem.id)
+                                                                            is UnifiedOverlayItem.VfxOverlay -> onSelectVfx?.invoke(overlayItem.id)
                                                                         }
                                                                     },
                                                                     onDrag = { change, dragAmount ->
@@ -838,6 +880,7 @@ fun CapCutMultiTrackTimeline(
                                                                             when (overlayItem) {
                                                                                 is UnifiedOverlayItem.TextOverlay -> onMoveText?.invoke(overlayItem.id, newStart)
                                                                                 is UnifiedOverlayItem.StickerOverlay -> onMoveSticker?.invoke(overlayItem.id, newStart)
+                                                                                is UnifiedOverlayItem.VfxOverlay -> onMoveVfx?.invoke(overlayItem.id, newStart)
                                                                             }
                                                                         }
                                                                     }
@@ -853,6 +896,7 @@ fun CapCutMultiTrackTimeline(
                                                                     else if (overlayItem.sticker.isGif) Icons.Default.Gif
                                                                     else Icons.Default.Image
                                                                 }
+                                                                is UnifiedOverlayItem.VfxOverlay -> Icons.Default.AutoAwesome
                                                             },
                                                             contentDescription = null,
                                                             tint = Color.White,
@@ -899,6 +943,7 @@ fun CapCutMultiTrackTimeline(
                                                                                 when (overlayItem) {
                                                                                     is UnifiedOverlayItem.TextOverlay -> onTrimText?.invoke(overlayItem.id, newStart, newDur) ?: onMoveText?.invoke(overlayItem.id, newStart)
                                                                                     is UnifiedOverlayItem.StickerOverlay -> onTrimSticker?.invoke(overlayItem.id, newStart, newDur) ?: onMoveSticker?.invoke(overlayItem.id, newStart)
+                                                                                    is UnifiedOverlayItem.VfxOverlay -> onTrimVfx?.invoke(overlayItem.id, newStart, newDur) ?: onMoveVfx?.invoke(overlayItem.id, newStart)
                                                                                 }
                                                                             }
                                                                         }
@@ -934,6 +979,7 @@ fun CapCutMultiTrackTimeline(
                                                                                 when (overlayItem) {
                                                                                     is UnifiedOverlayItem.TextOverlay -> onTrimText?.invoke(overlayItem.id, overlayItem.startTimeMs, newDur)
                                                                                     is UnifiedOverlayItem.StickerOverlay -> onTrimSticker?.invoke(overlayItem.id, overlayItem.startTimeMs, newDur)
+                                                                                    is UnifiedOverlayItem.VfxOverlay -> onTrimVfx?.invoke(overlayItem.id, overlayItem.startTimeMs, newDur)
                                                                                 }
                                                                             }
                                                                         }
@@ -1190,7 +1236,9 @@ private fun TimeRuler(
     dpPerSecond: Float,
     zoomScale: Float,
     widthDp: Dp,
-    onSeek: (Long) -> Unit
+    onSeek: (Long) -> Unit,
+    onDragStart: (() -> Unit)? = null,
+    onDragEnd: (() -> Unit)? = null
 ) {
     val density = LocalDensity.current
     val totalSeconds = (totalDurationMs / 1000).toInt() + 4
@@ -1209,6 +1257,22 @@ private fun TimeRuler(
                         onSeek(ms)
                     }
                 }
+            }
+            .pointerInput(totalDurationMs, dpPerSecond) {
+                detectDragGestures(
+                    onDragStart = { onDragStart?.invoke() },
+                    onDragEnd = { onDragEnd?.invoke() },
+                    onDragCancel = { onDragEnd?.invoke() },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        val pxPerSecond = with(density) { dpPerSecond.dp.toPx() }
+                        if (pxPerSecond > 0) {
+                            val sec = change.position.x / pxPerSecond
+                            val ms = (sec * 1000f).toLong().coerceIn(0L, totalDurationMs)
+                            onSeek(ms)
+                        }
+                    }
+                )
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {

@@ -159,7 +159,9 @@ data class VFXEffectItem(
     val intensity: Float = 50f,
     val isPremium: Boolean = false,
     val clipId: String? = null,
-    val isEnabled: Boolean = true
+    val isEnabled: Boolean = true,
+    val startTimeMs: Long = 0L,
+    val durationMs: Long = 3000L
 )
 
 data class TransitionItem(

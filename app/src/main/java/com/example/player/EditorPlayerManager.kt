@@ -55,6 +55,7 @@ class EditorPlayerManager(
     private var activeAudios: List<AudioTrackItem> = emptyList()
     private var activeTexts: List<com.example.model.TextOverlayItem> = emptyList()
     private var activeStickers: List<com.example.model.StickerItem> = emptyList()
+    private var activeVfx: List<com.example.model.VFXEffectItem> = emptyList()
 
     private var trackingJob: Job? = null
     private var hardwareSeekJob: Job? = null
@@ -86,7 +87,9 @@ class EditorPlayerManager(
                 _playbackState.update { it.copy(isBuffering = isBuffering) }
 
                 if (playbackState == Player.STATE_ENDED) {
-                    handleClipEnded()
+                    if (_playbackState.value.currentClipIndex >= 0) {
+                        handleClipEnded()
+                    }
                 }
             }
 
@@ -132,17 +135,19 @@ class EditorPlayerManager(
         audios: List<AudioTrackItem>,
         texts: List<com.example.model.TextOverlayItem> = emptyList(),
         stickers: List<com.example.model.StickerItem> = emptyList(),
+        vfx: List<com.example.model.VFXEffectItem> = emptyList(),
         initialSeekPlayhead: Long? = null
     ) {
-        val totalDuration = TimelineUtils.calculateTotalProjectDuration(clips, audios, texts, stickers)
         activeClips = clips
         activeAudios = audios
         activeTexts = texts
         activeStickers = stickers
+        activeVfx = vfx
+        val totalDuration = TimelineUtils.calculateTotalProjectDuration(clips, audios, texts, stickers, vfx)
         audioSyncManager.setTracks(audios)
         _playbackState.update { it.copy(totalDurationMs = totalDuration) }
 
-        if (clips.isEmpty() && audios.isEmpty() && texts.isEmpty() && stickers.isEmpty()) {
+        if (clips.isEmpty() && audios.isEmpty() && texts.isEmpty() && stickers.isEmpty() && vfx.isEmpty()) {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
             loadedClipId = null
@@ -177,17 +182,17 @@ class EditorPlayerManager(
     }
 
     fun setClips(clips: List<MediaClip>, initialSeekPlayhead: Long? = null) {
-        setClipsAndAudios(clips, activeAudios, activeTexts, activeStickers, initialSeekPlayhead)
+        setClipsAndAudios(clips, activeAudios, activeTexts, activeStickers, activeVfx, initialSeekPlayhead)
     }
 
     fun setAudios(audios: List<AudioTrackItem>) {
-        setClipsAndAudios(activeClips, audios, activeTexts, activeStickers, _playbackState.value.currentPositionMs)
+        setClipsAndAudios(activeClips, audios, activeTexts, activeStickers, activeVfx, _playbackState.value.currentPositionMs)
     }
 
     fun play() {
-        if (activeClips.isEmpty() && activeAudios.isEmpty() && activeTexts.isEmpty() && activeStickers.isEmpty()) return
+        if (activeClips.isEmpty() && activeAudios.isEmpty() && activeTexts.isEmpty() && activeStickers.isEmpty() && activeVfx.isEmpty()) return
 
-        val totalDuration = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios, activeTexts, activeStickers)
+        val totalDuration = getTotalDuration()
         val currentPos = _playbackState.value.currentPositionMs
 
         // Se estiver no final da timeline, reinicia do início
@@ -268,7 +273,7 @@ class EditorPlayerManager(
      * Utiliza seekGeneration para invalidar callbacks antigos e coalescer seeks rápidos de scrubbing.
      */
     fun getTotalDuration(): Long {
-        return TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios, activeTexts, activeStickers)
+        return TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios, activeTexts, activeStickers, activeVfx)
     }
 
     fun seekTo(timelinePositionMs: Long) {
@@ -464,26 +469,40 @@ class EditorPlayerManager(
 
     private fun handleClipEnded() {
         val currentIndex = _playbackState.value.currentClipIndex
+        if (currentIndex < 0) {
+            val totalDuration = getTotalDuration()
+            val currentPos = _playbackState.value.currentPositionMs
+            if (currentPos >= totalDuration) {
+                pause()
+                _playbackState.update { it.copy(currentPositionMs = totalDuration) }
+                onTimelinePositionChanged?.invoke(totalDuration)
+            }
+            return
+        }
+
         val nextIndex = TimelineUtils.getNextClipIndex(activeClips, currentIndex)
 
         if (nextIndex != null) {
             loadNextClip(nextIndex)
         } else {
             val totalDuration = getTotalDuration()
-            val currentPos = _playbackState.value.currentPositionMs
+            val totalClipsDuration = TimelineUtils.calculateProjectTimelineDuration(activeClips)
 
-            // Se houver faixas de áudio ou outros elementos estendendo além do último clipe de vídeo, continue tocando
-            if (currentPos < totalDuration) {
+            // Se houver faixas de áudio, textos, stickers ou efeitos estendendo além do último clipe de vídeo:
+            // Continua a reprodução da timeline usando o relógio virtual
+            if (totalClipsDuration < totalDuration) {
                 _playbackState.update {
                     it.copy(
                         currentClipId = null,
                         currentClipIndex = -1,
                         isPhotoActive = false,
-                        activePhotoPath = null
+                        activePhotoPath = null,
+                        currentPositionMs = totalClipsDuration
                     )
                 }
                 exoPlayer.pause()
                 lastPhotoTickTime = System.currentTimeMillis()
+                audioSyncManager.syncWithMasterPlayhead(totalClipsDuration, isMasterPlaying = true)
             } else {
                 pause()
                 _playbackState.update { it.copy(currentPositionMs = totalDuration) }

@@ -271,7 +271,9 @@ class VideoFrameRenderer(
     // -------------------------------------------------------------
 
     private fun renderVfxOverlay(canvas: Canvas, vfxList: List<VFXEffectItem>, playheadMs: Long) {
-        vfxList.forEach { vfx ->
+        vfxList.filter { vfx ->
+            vfx.isEnabled && playheadMs >= vfx.startTimeMs && playheadMs < (vfx.startTimeMs + vfx.durationMs)
+        }.forEach { vfx ->
             val intensity = (vfx.intensity / 100f).coerceIn(0f, 1f)
             when (vfx.name.trim()) {
                 "Vinheta" -> {

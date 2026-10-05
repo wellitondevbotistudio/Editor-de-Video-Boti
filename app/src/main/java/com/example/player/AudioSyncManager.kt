@@ -78,7 +78,10 @@ class AudioSyncManager(private val context: Context) {
                 val currentPos = player.currentPosition
                 val drift = abs(currentPos - desiredSourceMs)
 
-                if (drift > 150L) {
+                // Durante reprodução contínua, evita micro-seeks que causam travamento/gagueira.
+                // Apenas corrige se o desvio for muito grande (> 600ms) ou se estiver pausado.
+                val maxAllowedDrift = if (isMasterPlaying) 600L else 80L
+                if (drift > maxAllowedDrift && player.playbackState != Player.STATE_BUFFERING) {
                     player.seekTo(desiredSourceMs)
                 }
 

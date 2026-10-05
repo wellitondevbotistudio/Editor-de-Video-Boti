@@ -320,6 +320,7 @@ object TimelineUtils {
     }
 
     fun getNextClipIndex(clips: List<MediaClip>, currentIndex: Int): Int? {
+        if (currentIndex < 0) return null
         val next = currentIndex + 1
         return if (next in clips.indices) next else null
     }
@@ -366,13 +367,15 @@ object TimelineUtils {
         clips: List<MediaClip>,
         audios: List<com.example.model.AudioTrackItem> = emptyList(),
         texts: List<com.example.model.TextOverlayItem> = emptyList(),
-        stickers: List<com.example.model.StickerItem> = emptyList()
+        stickers: List<com.example.model.StickerItem> = emptyList(),
+        vfx: List<com.example.model.VFXEffectItem> = emptyList()
     ): Long {
         val videoDuration = calculateProjectTimelineDuration(clips)
         val maxAudioEnd = audios.maxOfOrNull { getAudioTimelineEndMs(it) } ?: 0L
         val maxTextEnd = texts.maxOfOrNull { it.startTimeMs + it.durationMs } ?: 0L
         val maxStickerEnd = stickers.maxOfOrNull { it.startTimeMs + it.durationMs } ?: 0L
-        return maxOf(videoDuration, maxAudioEnd, maxTextEnd, maxStickerEnd).coerceAtLeast(0L)
+        val maxVfxEnd = vfx.maxOfOrNull { it.startTimeMs + it.durationMs } ?: 0L
+        return maxOf(videoDuration, maxAudioEnd, maxTextEnd, maxStickerEnd, maxVfxEnd).coerceAtLeast(0L)
     }
 
     fun calculateTotalProjectDuration(project: com.example.model.ProjectItem): Long {
@@ -380,7 +383,8 @@ object TimelineUtils {
             clips = project.clips,
             audios = project.audios,
             texts = project.texts,
-            stickers = project.stickers
+            stickers = project.stickers,
+            vfx = project.activeVFX
         )
     }
 
