@@ -1,0 +1,31 @@
+# Boti Video Editor
+
+Aplicativo nativo Android de edição de vídeo completa, desenvolvido em Kotlin e Jetpack Compose com Material Design 3.
+
+## Funcionalidades
+
+- **Projetos & Linha do Tempo**: Gerenciamento de projetos, múltiplos clipes, faixas de áudio, textos e legendas sincronizadas.
+- **Ferramentas de Edição**:
+  - Dividir (Split) no indicador de reprodução
+  - Cortar (Trim) início e fim de clipes
+  - Controle de Velocidade (0.2x a 4.0x)
+  - Filtros de cor (Vívido, Frio, Quente, P&B, Filme, Retrô, Suave, Cyberpunk)
+  - Ajustes de imagem (Brilho, Contraste, Saturação)
+  - Transições suaves entre clipes (Dissolver, Fade, Zoom, Girar, Flash, Ondular)
+  - Efeitos Visuais (VFX): Desfoque, Glitch, RGB Split, Shake, Vinheta, VHS, Bokeh
+- **Legendas Automáticas com IA**: Transcrição inteligente em múltiplos idiomas (Português BR, English US, Español, Français, etc.) com edição de tempo e estilo.
+- **Modelos Rápidos**: Templates prontos para redes sociais, vlogs e viagens com sincronização de batidas.
+- **Exportação Flexível**:
+  - Resoluções: 720p (HD), 1080p (Full HD), 4K (Ultra HD)
+  - Taxa de quadros: 24, 30 e 60 FPS
+  - Opção de remoção de marca d'água
+- **Player Integrado**: Visualização em tela cheia com scrub timeline, repetição em loop e compartilhamento.
+- **Boti PRO**: Desbloqueio de recursos avançados (exportação 4K 60FPS, sem marca d'água, efeitos e modelos exclusivos).
+
+## Arquitetura & Tecnologias
+
+- **Linguagem**: Kotlin 2.1
+- **UI Toolkit**: Jetpack Compose com Material 3 (Dark Theme)
+- **Gerenciamento de Estado**: StateFlow e ViewModel (MVVM)
+- **Carregamento de Imagens**: Coil Compose
+- **Gradle**: Gradle 9.3.1 (Kotlin DSL) com Android Gradle Plugin 8.9 / 9.1
