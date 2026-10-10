@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -73,9 +74,9 @@ fun StickerLayer(
         val canvasHpx = with(density) { canvasHeight.toPx() }
 
         stickers.forEach { item ->
-            // Se o item estiver fora do intervalo temporal visível, pula qualquer computação imediatamente
+            // Se o item estiver fora do intervalo temporal visível ou invisível, pula qualquer computação imediatamente
             val isTimeActive = currentPlayheadMs in item.startTimeMs until (item.startTimeMs + item.durationMs)
-            if (!isTimeActive && !item.isVisible) return@forEach
+            if (!isTimeActive || !item.isVisible) return@forEach
 
             if (item.isVisible) {
                 val animState = OverlayAnimationEngine.calculateStickerState(
@@ -112,6 +113,11 @@ fun StickerLayer(
                         ) { onSelectSticker(item.id) }
                     } else {
                         Modifier
+                            .pointerInput(item.id) {
+                                detectTapGestures(
+                                    onTap = { onSelectSticker(item.id) }
+                                )
+                            }
                             .pointerInput(item.id, canvasWpx, canvasHpx) {
                                 var curX = item.posX
                                 var curY = item.posY
@@ -138,12 +144,6 @@ fun StickerLayer(
                                         onMoveSticker(item.id, curX, curY, true)
                                     }
                                 )
-                            }
-                            .clickable(
-                                interactionSource = stickerInteractionSource,
-                                indication = null
-                            ) {
-                                onSelectSticker(item.id)
                             }
                     }
 
@@ -173,9 +173,9 @@ fun StickerLayer(
                             .testTag("sticker_overlay_${item.id}")
                     ) {
                         if (item.isVideo) {
-                            // Extração de frame real do vídeo de sobreposição sincronizado com a timeline
-                            val relativeTimeMs = (currentPlayheadMs - item.startTimeMs).coerceIn(0L, item.durationMs)
-                            val videoFrameBitmap = remember(item.localPath, item.uri, relativeTimeMs / 100) {
+                            // Extração de frame real contínuo do vídeo de sobreposição sincronizado milissegundo a milissegundo com a timeline
+                            val relativeTimeMs = ((currentPlayheadMs - item.startTimeMs) + item.trimStartMs).coerceAtLeast(0L)
+                            val videoFrameBitmap = remember(item.localPath, item.uri, relativeTimeMs / 33) {
                                 VideoFrameExtractor.extractFrame(
                                     context = context,
                                     localPath = item.localPath.ifBlank { null },
@@ -280,52 +280,66 @@ fun StickerLayer(
                             }
                         }
 
-                        // Alças de controle quando selecionado
+                        // Alças de controle quando selecionado com escala constante independente
+                        val invScale = (1f / (item.scale * animState.scale)).coerceIn(0.15f, 4f)
+
                         if (isSelected && isLocked) {
                             Surface(
                                 shape = CircleShape,
                                 color = Color(0xFF1E293B),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEAB308)),
                                 modifier = Modifier
-                                    .size(22.dp)
+                                    .size(28.dp)
                                     .align(Alignment.TopCenter)
-                                    .offset(y = (-11).dp)
+                                    .offset(y = (-14).dp)
+                                    .graphicsLayer {
+                                        scaleX = invScale
+                                        scaleY = invScale
+                                    }
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Lock,
                                     contentDescription = "Sobreposição Bloqueada",
                                     tint = Color(0xFFEAB308),
-                                    modifier = Modifier.padding(3.dp)
+                                    modifier = Modifier.padding(4.dp)
                                 )
                             }
                         } else if (isSelected) {
                             // 1. Excluir (Topo-Direita)
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = CircleShape,
                                 color = PrimaryPurple,
                                 modifier = Modifier
-                                    .size(24.dp)
+                                    .size(28.dp)
                                     .align(Alignment.TopEnd)
-                                    .offset(x = 6.dp, y = (-6).dp)
+                                    .offset(x = 10.dp, y = (-10).dp)
+                                    .graphicsLayer {
+                                        scaleX = invScale
+                                        scaleY = invScale
+                                    }
                                     .clickable { onDeleteSticker(item.id) }
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Remover Sticker",
                                     tint = Color.White,
-                                    modifier = Modifier.padding(4.dp)
+                                    modifier = Modifier.padding(5.dp)
                                 )
                             }
 
                             // 2. Girar (Topo-Esquerda)
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = CircleShape,
                                 color = Color(0xFF1E293B),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryPurpleVariant),
                                 modifier = Modifier
-                                    .size(24.dp)
+                                    .size(28.dp)
                                     .align(Alignment.TopStart)
-                                    .offset(x = (-6).dp, y = (-6).dp)
+                                    .offset(x = (-10).dp, y = (-10).dp)
+                                    .graphicsLayer {
+                                        scaleX = invScale
+                                        scaleY = invScale
+                                    }
                                     .clickable {
                                         val newRot = (item.rotation + 45f) % 360f
                                         onRotateSticker?.invoke(item.id, newRot)
@@ -335,18 +349,22 @@ fun StickerLayer(
                                     imageVector = Icons.Default.RotateRight,
                                     contentDescription = "Girar Sticker",
                                     tint = Color.White,
-                                    modifier = Modifier.padding(4.dp)
+                                    modifier = Modifier.padding(5.dp)
                                 )
                             }
 
                             // 3. Dimensionar (Base-Direita)
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = CircleShape,
                                 color = PrimaryPurpleVariant,
                                 modifier = Modifier
-                                    .size(24.dp)
+                                    .size(28.dp)
                                     .align(Alignment.BottomEnd)
-                                    .offset(x = 6.dp, y = 6.dp)
+                                    .offset(x = 10.dp, y = 10.dp)
+                                    .graphicsLayer {
+                                        scaleX = invScale
+                                        scaleY = invScale
+                                    }
                                     .pointerInput(item.id, canvasWpx) {
                                         var initialScale = item.scale
                                         var accumulatedDelta = 0f
@@ -370,7 +388,7 @@ fun StickerLayer(
                                     imageVector = Icons.Default.OpenInFull,
                                     contentDescription = "Redimensionar Sticker",
                                     tint = Color.White,
-                                    modifier = Modifier.padding(4.dp)
+                                    modifier = Modifier.padding(5.dp)
                                 )
                             }
                         }

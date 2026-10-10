@@ -18,6 +18,9 @@ object ColorMatrixPipeline {
     const val LUMA_G = 0.715f
     const val LUMA_B = 0.072f
 
+    private val identityMatrix = ColorMatrix()
+    private val identityComposeMatrix = androidx.compose.ui.graphics.ColorMatrix()
+
     /**
      * Calcula a matriz de brilho real para a faixa [-100 .. +100].
      * 0f é neutro.
@@ -196,6 +199,10 @@ object ColorMatrixPipeline {
         saturation: Float,
         filterName: String
     ): ColorMatrix {
+        if (brightness == 0f && contrast == 0f && saturation == 0f && (filterName == "Original" || filterName.isBlank())) {
+            return identityMatrix
+        }
+
         val result = ColorMatrix()
 
         if (brightness != 0f) {
@@ -221,6 +228,7 @@ object ColorMatrixPipeline {
      * Retorna a matriz para uso no Jetpack Compose.
      */
     fun toComposeColorMatrix(androidMatrix: ColorMatrix): androidx.compose.ui.graphics.ColorMatrix {
+        if (androidMatrix === identityMatrix) return identityComposeMatrix
         return androidx.compose.ui.graphics.ColorMatrix(androidMatrix.array)
     }
 

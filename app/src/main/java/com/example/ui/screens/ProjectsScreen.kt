@@ -284,8 +284,8 @@ fun ProjectsScreen(
                                 onClick = onNavigateToCaptions
                             )
                             QuickToolItem(
-                                title = "Efeitos IA",
-                                subtitle = "VFX & Glow",
+                                title = "Efeitos VFX",
+                                subtitle = "Glow & Cinema",
                                 icon = Icons.Default.AutoAwesome,
                                 gradientColors = listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9)),
                                 onClick = {

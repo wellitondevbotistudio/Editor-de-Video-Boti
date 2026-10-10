@@ -157,6 +157,7 @@ fun CapCutMultiTrackTimeline(
     onTrimAudio: ((audioId: String, trimStartMs: Long, trimEndMs: Long) -> Unit)? = null,
     onTrimVfx: ((vfxId: String, startMs: Long, durationMs: Long) -> Unit)? = null,
     onSelectCover: (() -> Unit)? = null,
+    highResPositionFlow: kotlinx.coroutines.flow.StateFlow<Long>? = null,
     modifier: Modifier = Modifier
 ) {
     var zoomScale by remember { mutableFloatStateOf(1.0f) }
@@ -337,21 +338,29 @@ fun CapCutMultiTrackTimeline(
             val timelineAreaWidth = totalViewportWidth - leftHeaderWidth
             val centerPlayheadOffsetDp = timelineAreaWidth / 2
 
-            // Auto-scroll timeline under the fixed center playhead during playback
-            LaunchedEffect(currentPositionMs, isPlaying) {
+            // Auto-scroll timeline under the fixed center playhead during playback via highResPositionFlow
+            LaunchedEffect(isPlaying) {
                 if (isPlaying) {
-                    val targetPx = with(density) { (currentPositionMs / 1000f * dpPerSecond).dp.toPx() }
-                    horizontalScrollState.scrollTo(targetPx.roundToInt())
+                    val flow = highResPositionFlow
+                    if (flow != null) {
+                        flow.collect { ms ->
+                            val targetPx = with(density) { (ms / 1000f * dpPerSecond).dp.toPx() }
+                            horizontalScrollState.scrollTo(targetPx.roundToInt())
+                        }
+                    }
                 }
             }
 
-            // Sync scroll if position changed externally while paused (and not actively user scrubbing)
+            // Sync scroll if position changed externally while paused (or fallback when highResPositionFlow is null)
             LaunchedEffect(currentPositionMs) {
                 if (!isPlaying && !horizontalScrollState.isScrollInProgress) {
                     val targetPx = with(density) { (currentPositionMs / 1000f * dpPerSecond).dp.toPx() }
-                    if (Math.abs(horizontalScrollState.value - targetPx) > 15) {
+                    if (Math.abs(horizontalScrollState.value - targetPx) > 2) {
                         horizontalScrollState.scrollTo(targetPx.roundToInt())
                     }
+                } else if (isPlaying && highResPositionFlow == null) {
+                    val targetPx = with(density) { (currentPositionMs / 1000f * dpPerSecond).dp.toPx() }
+                    horizontalScrollState.scrollTo(targetPx.roundToInt())
                 }
             }
 
@@ -1258,11 +1267,27 @@ fun CapCutMultiTrackTimeline(
                             .zIndex(100f),
                         contentAlignment = Alignment.TopCenter
                     ) {
-                        // Playhead top triangle/pointer
+                        // Playhead top triangle/pointer (draggable scrubber handle)
                         Canvas(
                             modifier = Modifier
-                                .size(14.dp, 10.dp)
+                                .size(24.dp, 14.dp)
                                 .offset(y = 1.dp)
+                                .pointerInput(dpPerSecond, safeTotalMs) {
+                                    detectDragGestures(
+                                        onDragStart = { onDragStart?.invoke() },
+                                        onDragEnd = { onDragEnd?.invoke() },
+                                        onDragCancel = { onDragEnd?.invoke() },
+                                        onDrag = { change, dragAmount ->
+                                            change.consume()
+                                            val pxPerSec = with(density) { dpPerSecond.dp.toPx() }
+                                            if (pxPerSec > 0) {
+                                                val deltaMs = (dragAmount.x / pxPerSec * 1000f).toLong()
+                                                val newPos = (currentPositionMs + deltaMs).coerceIn(0L, safeTotalMs)
+                                                onSeek(newPos)
+                                            }
+                                        }
+                                    )
+                                }
                         ) {
                             val path = androidx.compose.ui.graphics.Path().apply {
                                 moveTo(size.width / 2f, size.height)
@@ -1318,22 +1343,6 @@ private fun TimeRuler(
                         onSeek(ms)
                     }
                 }
-            }
-            .pointerInput(totalDurationMs, dpPerSecond) {
-                detectDragGestures(
-                    onDragStart = { onDragStart?.invoke() },
-                    onDragEnd = { onDragEnd?.invoke() },
-                    onDragCancel = { onDragEnd?.invoke() },
-                    onDrag = { change, _ ->
-                        change.consume()
-                        val pxPerSecond = with(density) { dpPerSecond.dp.toPx() }
-                        if (pxPerSecond > 0) {
-                            val sec = change.position.x / pxPerSecond
-                            val ms = (sec * 1000f).toLong().coerceIn(0L, totalDurationMs)
-                            onSeek(ms)
-                        }
-                    }
-                )
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {

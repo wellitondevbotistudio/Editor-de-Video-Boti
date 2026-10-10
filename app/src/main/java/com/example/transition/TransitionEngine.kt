@@ -32,7 +32,7 @@ data class ActiveTransitionInfo(
 object TransitionEngine {
 
     /**
-     * Limita com segurança a duração da transição com base na duração dos clipes envolvidos.
+     * Limita com segurança a duração da transição com base na duração visual real dos clipes envolvidos na timeline.
      */
     fun clampTransitionDuration(
         clipADurationMs: Long,
@@ -45,6 +45,7 @@ object TransitionEngine {
 
     /**
      * Descobre se o playhead atual está dentro da janela de uma transição entre dois clipes consecutivos.
+     * Considera a velocidade real de reprodução de clipA e clipB para calcular os limites exatos da timeline.
      */
     fun findActiveTransition(
         clips: List<MediaClip>,
@@ -65,6 +66,9 @@ object TransitionEngine {
             if (type == TransitionType.CUT) continue
 
             val clipAStart = TimelineUtils.getClipStartTimelineMs(clips, i)
+            // Duração visual real na timeline de cada clipe considerando velocidade (clip.durationMs / clip.speed)
+            val speedA = TimelineUtils.getSafeSpeed(clipA)
+            val speedB = TimelineUtils.getSafeSpeed(clipB)
             val clipADuration = TimelineUtils.calculateClipTimelineDuration(clipA)
             val clipBDuration = TimelineUtils.calculateClipTimelineDuration(clipB)
 

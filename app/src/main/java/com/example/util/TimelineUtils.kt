@@ -158,12 +158,32 @@ object TimelineUtils {
             clip.transitionDurationMs
         }
 
+        // Part 2 herda integralmente todos os atributos de cor, filtros, proporções de corte e transformações espaciais do clipe original
         val clipPart2 = clip.copy(
             id = newClipId,
             trimStartMs = splitSourceTimeMs,
             trimEndMs = trimEnd,
             durationMs = part2TimelineDuration,
             title = "${clip.title} (2)",
+            speed = clip.speed,
+            volume = clip.volume,
+            brightness = clip.brightness,
+            contrast = clip.contrast,
+            saturation = clip.saturation,
+            filter = clip.filter,
+            cropRatio = clip.cropRatio,
+            rotation = clip.rotation,
+            scale = clip.scale,
+            flipHorizontal = clip.flipHorizontal,
+            flipVertical = clip.flipVertical,
+            opacity = clip.opacity,
+            positionX = clip.positionX,
+            positionY = clip.positionY,
+            isReverse = clip.isReverse,
+            isFrozen = clip.isFrozen,
+            isVisible = clip.isVisible,
+            isMuted = clip.isMuted,
+            isLocked = clip.isLocked,
             transition = clip.transition,
             transitionDurationMs = safeTransitionDuration
         )
@@ -563,7 +583,8 @@ object TimelineUtils {
         val newId = "stk_dup_" + java.util.UUID.randomUUID().toString().take(6)
         val dup = original.copy(
             id = newId,
-            startTimeMs = original.startTimeMs + original.durationMs,
+            posX = (original.posX + 0.04f).coerceIn(0.05f, 0.95f),
+            posY = (original.posY + 0.04f).coerceIn(0.05f, 0.95f),
             name = "${original.name} (Cópia)"
         )
         val updated = stickers.toMutableList().apply {
@@ -582,7 +603,8 @@ object TimelineUtils {
         val newId = "txt_dup_" + java.util.UUID.randomUUID().toString().take(6)
         val dup = original.copy(
             id = newId,
-            startTimeMs = original.startTimeMs + original.durationMs
+            posX = (original.posX + 0.04f).coerceIn(0.05f, 0.95f),
+            posY = (original.posY + 0.04f).coerceIn(0.05f, 0.95f)
         )
         val updated = texts.toMutableList().apply {
             add(index + 1, dup)
@@ -652,5 +674,94 @@ object TimelineUtils {
             result.add(PackedLaneItem(item, start, duration, assignedLane))
         }
         return result
+    }
+
+    /**
+     * Interpolação Linear de Keyframes de Transformação espacial (CapCut Style).
+     * Se não houver keyframes, retorna os valores base do clipe.
+     */
+    fun interpolateKeyframeTransform(
+        clip: MediaClip,
+        currentTimelineMs: Long,
+        clipStartMs: Long
+    ): com.example.model.KeyframePoint {
+        val keyframes = clip.keyframes.sortedBy { it.timeMs }
+        if (keyframes.isEmpty()) {
+            return com.example.model.KeyframePoint(
+                timeMs = 0L,
+                scale = clip.scale,
+                rotation = clip.rotation,
+                positionX = clip.positionX,
+                positionY = clip.positionY,
+                opacity = clip.opacity
+            )
+        }
+
+        val relativeTimeMs = (currentTimelineMs - clipStartMs).coerceAtLeast(0L)
+
+        // Antes do primeiro keyframe
+        if (relativeTimeMs <= keyframes.first().timeMs) {
+            return keyframes.first()
+        }
+        // Depois do último keyframe
+        if (relativeTimeMs >= keyframes.last().timeMs) {
+            return keyframes.last()
+        }
+
+        // Encontra o segmento [k1, k2]
+        for (i in 0 until keyframes.size - 1) {
+            val k1 = keyframes[i]
+            val k2 = keyframes[i + 1]
+            if (relativeTimeMs in k1.timeMs..k2.timeMs) {
+                val span = (k2.timeMs - k1.timeMs).toFloat().coerceAtLeast(1f)
+                val fraction = (relativeTimeMs - k1.timeMs) / span
+                return com.example.model.KeyframePoint(
+                    timeMs = relativeTimeMs,
+                    scale = k1.scale + (k2.scale - k1.scale) * fraction,
+                    rotation = k1.rotation + (k2.rotation - k1.rotation) * fraction,
+                    positionX = k1.positionX + (k2.positionX - k1.positionX) * fraction,
+                    positionY = k1.positionY + (k2.positionY - k1.positionY) * fraction,
+                    opacity = k1.opacity + (k2.opacity - k1.opacity) * fraction
+                )
+            }
+        }
+
+        return keyframes.last()
+    }
+
+    /**
+     * Congela o quadro (Freeze Frame / Parar Vídeo estilo CapCut).
+     * Divide o clipe no playhead e insere um segmento de 3 segundos congelado como Foto.
+     */
+    fun insertFreezeFrame(
+        clips: List<MediaClip>,
+        playheadTimelineMs: Long,
+        freezeDurationMs: Long = 3000L
+    ): Pair<List<MediaClip>, String>? {
+        val info = findClipAtTimelinePosition(clips, playheadTimelineMs) ?: return null
+        val clip = info.clip
+        val clipIndex = info.index
+
+        val freezeClipId = "clip_freeze_" + UUID.randomUUID().toString().take(6)
+        val freezeClip = clip.copy(
+            id = freezeClipId,
+            title = "${clip.title} (Congelado)",
+            type = com.example.model.MediaType.PHOTO,
+            isFrozen = true,
+            durationMs = freezeDurationMs,
+            localPath = if (clip.thumbnailPath.isNotBlank()) clip.thumbnailPath else clip.localPath,
+            thumbnailPath = clip.thumbnailPath,
+            speed = 1.0f,
+            transition = null
+        )
+
+        // Se o corte for no meio do clipe, divide em Parte 1, Freeze e Parte 2
+        val (splitClips, _) = splitClipAtPlayhead(clips, playheadTimelineMs) ?: return null
+        val mutable = splitClips.toMutableList()
+        // Insere o clipe congelado entre a parte 1 e parte 2 (no índice clipIndex + 1)
+        val insertIndex = (clipIndex + 1).coerceIn(0, mutable.size)
+        mutable.add(insertIndex, freezeClip)
+
+        return Pair(mutable, freezeClipId)
     }
 }

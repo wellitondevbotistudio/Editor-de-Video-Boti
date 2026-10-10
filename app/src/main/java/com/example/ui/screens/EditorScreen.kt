@@ -502,15 +502,24 @@ fun EditorScreen(
                         }
                         else -> {
                             "Editar Clipe" to listOf(
-                                Triple("Cortar", Icons.Default.ContentCut) { viewModel.setActivePanel(ToolPanel.TRIM) },
                                 Triple("Dividir", Icons.Default.CallSplit) { viewModel.splitSelectedElementAtPlayhead() },
-                                Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) },
                                 Triple("Velocidade", Icons.Default.Speed) { viewModel.setActivePanel(ToolPanel.SPEED) },
+                                Triple("Animação", Icons.Default.MovieFilter) { viewModel.setActivePanel(ToolPanel.ANIMATION) },
+                                Triple("Chroma Key", Icons.Default.ColorLens) { viewModel.setActivePanel(ToolPanel.CHROMA_KEY) },
+                                Triple("Extrair Áudio", Icons.Default.GraphicEq) { viewModel.extractAudioFromSelectedClip() },
                                 Triple("Volume", Icons.Default.VolumeUp) { viewModel.setActivePanel(ToolPanel.AUDIO) },
+                                Triple("Mudo", Icons.Default.VolumeMute) { viewModel.toggleMuteClip() },
+                                Triple("Cortar", Icons.Default.ContentCut) { viewModel.setActivePanel(ToolPanel.TRIM) },
+                                Triple("Reverter", Icons.Default.RotateLeft) { viewModel.toggleReverseSelectedClip() },
+                                Triple("Congelar", Icons.Default.PauseCircle) { viewModel.freezeFrameAtPlayhead() },
+                                Triple("Keyframe", Icons.Default.Diamond) { viewModel.toggleKeyframeAtPlayhead() },
+                                Triple("Filtros", Icons.Default.FilterFrames) { viewModel.setActivePanel(ToolPanel.FILTER) },
                                 Triple("Ajustes", Icons.Default.Tune) { viewModel.setActivePanel(ToolPanel.ADJUST) },
-                                Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateSelectedElement() },
+                                Triple("Voz", Icons.Default.RecordVoiceOver) { viewModel.setActivePanel(ToolPanel.VOICE_EFFECT) },
                                 Triple("Recortar", Icons.Default.Crop) { viewModel.setActivePanel(ToolPanel.CROP) },
-                                Triple("Opacidade", Icons.Default.Opacity) { viewModel.setActivePanel(ToolPanel.TRANSFORM) }
+                                Triple("Duplicar", Icons.Default.ContentCopy) { viewModel.duplicateSelectedElement() },
+                                Triple("Opacidade", Icons.Default.Opacity) { viewModel.setActivePanel(ToolPanel.TRANSFORM) },
+                                Triple("Excluir", Icons.Default.Delete) { viewModel.deleteSelectedElement(); viewModel.setActivePanel(ToolPanel.NONE) }
                             )
                         }
                     }
@@ -554,6 +563,14 @@ fun EditorScreen(
                                         .aspectRatio(frameRatio)
                                 }
 
+                                val canvasBg = remember(project.canvasColorHex) {
+                                    try {
+                                        Color(android.graphics.Color.parseColor(project.canvasColorHex))
+                                    } catch (_: Exception) {
+                                        Color(0xFF111111)
+                                    }
+                                }
+
                                 VideoPreviewContent(
                                     project = project,
                                     uiState = uiState,
@@ -562,7 +579,7 @@ fun EditorScreen(
                                     viewModel = viewModel,
                                     modifier = videoModifier
                                         .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0xFF111111))
+                                        .background(canvasBg)
                                 )
                             }
                         }
@@ -596,26 +613,88 @@ fun EditorScreen(
                                     )
                                 }
 
-                                // Botão Play / Pause Central
-                                Surface(
-                                    onClick = { viewModel.togglePlayback() },
-                                    shape = CircleShape,
-                                    color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        if (uiState.isPlaying) BorderSubtle else PrimaryPurpleLight
-                                    ),
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .shadow(if (uiState.isPlaying) 0.dp else 6.dp, CircleShape, spotColor = PrimaryPurple)
-                                        .testTag("btn_play_pause")
+                                // Grupo de Playback: Keyframe, Voltar 5s, Play/Pause, Avançar 5s
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    Box(contentAlignment = Alignment.Center) {
+                                    // Botão de Keyframe no estilo Losango CapCut
+                                    val isClipSelected = currentClip != null && uiState.selectedClipId == currentClip.id
+                                    val hasKeyframeHere = isClipSelected && currentClip != null && currentClip.keyframes.any {
+                                        val clipStart = com.example.util.TimelineUtils.getClipStartTimelineMs(project.clips, project.clips.indexOfFirst { c -> c.id == currentClip.id }.coerceAtLeast(0))
+                                        val rel = (uiState.currentPositionMs - clipStart).coerceAtLeast(0L)
+                                        kotlin.math.abs(it.timeMs - rel) < 150L
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            if (isClipSelected) {
+                                                viewModel.toggleKeyframeAtPlayhead()
+                                            } else if (currentClip != null) {
+                                                viewModel.selectClip(currentClip.id)
+                                                viewModel.toggleKeyframeAtPlayhead(currentClip.id)
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .testTag("keyframe_diamond_button")
+                                    ) {
                                         Icon(
-                                            imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                            contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
-                                            tint = Color.White,
+                                            imageVector = Icons.Default.Diamond,
+                                            contentDescription = if (hasKeyframeHere) "Remover Keyframe" else "Adicionar Keyframe",
+                                            tint = if (hasKeyframeHere) DangerRed else if (isClipSelected) Color(0xFFFBBF24) else Color.White.copy(alpha = 0.6f),
                                             modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = { viewModel.rewind(5000L) },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .testTag("btn_rewind_5s")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Replay5,
+                                            contentDescription = "Retroceder 5 segundos",
+                                            tint = Color.White.copy(alpha = 0.85f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+
+                                    Surface(
+                                        onClick = { viewModel.togglePlayback() },
+                                        shape = CircleShape,
+                                        color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.dp,
+                                            if (uiState.isPlaying) BorderSubtle else PrimaryPurpleLight
+                                        ),
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .shadow(if (uiState.isPlaying) 0.dp else 6.dp, CircleShape, spotColor = PrimaryPurple)
+                                            .testTag("btn_play_pause")
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = { viewModel.forward(5000L) },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .testTag("btn_forward_5s")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Forward5,
+                                            contentDescription = "Avançar 5 segundos",
+                                            tint = Color.White.copy(alpha = 0.85f),
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }
@@ -710,6 +789,7 @@ fun EditorScreen(
                                 canRedo = uiState.canRedo,
                                 onSeek = { viewModel.seekTo(it) },
                                 onDragStart = { viewModel.pausePlayback() },
+                                highResPositionFlow = viewModel.playerManager.highResPositionMs,
                                 onSelectClip = { clipId ->
                                     viewModel.selectClip(clipId, seekToClipStart = false)
                                     viewModel.setActivePanel(ToolPanel.EDIT_TOOLS)
@@ -1045,6 +1125,14 @@ fun EditorScreen(
                                             .aspectRatio(frameRatio)
                                     }
 
+                                    val landscapeCanvasBg = remember(project.canvasColorHex) {
+                                        try {
+                                            Color(android.graphics.Color.parseColor(project.canvasColorHex))
+                                        } catch (_: Exception) {
+                                            Color(0xFF111111)
+                                        }
+                                    }
+
                                     VideoPreviewContent(
                                         project = project,
                                         uiState = uiState,
@@ -1053,7 +1141,7 @@ fun EditorScreen(
                                         viewModel = viewModel,
                                         modifier = videoModifier
                                             .clip(RoundedCornerShape(6.dp))
-                                            .background(Color(0xFF111111))
+                                            .background(landscapeCanvasBg)
                                     )
                                 }
                             }
@@ -1080,17 +1168,46 @@ fun EditorScreen(
                                         fontWeight = FontWeight.SemiBold
                                     )
 
-                                    Surface(
-                                        onClick = { viewModel.togglePlayback() },
-                                        shape = CircleShape,
-                                        color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
-                                        modifier = Modifier.size(30.dp).testTag("btn_play_pause")
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
-                                        Box(contentAlignment = Alignment.Center) {
+                                        IconButton(
+                                            onClick = { viewModel.rewind(5000L) },
+                                            modifier = Modifier.size(28.dp).testTag("btn_rewind_landscape")
+                                        ) {
                                             Icon(
-                                                imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                                contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
-                                                tint = Color.White,
+                                                imageVector = Icons.Default.Replay5,
+                                                contentDescription = "Retroceder 5 segundos",
+                                                tint = Color.White.copy(alpha = 0.85f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        Surface(
+                                            onClick = { viewModel.togglePlayback() },
+                                            shape = CircleShape,
+                                            color = if (uiState.isPlaying) SurfaceElevated else PrimaryPurple,
+                                            modifier = Modifier.size(30.dp).testTag("btn_play_pause")
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                    contentDescription = if (uiState.isPlaying) "Pausar" else "Reproduzir",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+
+                                        IconButton(
+                                            onClick = { viewModel.forward(5000L) },
+                                            modifier = Modifier.size(28.dp).testTag("btn_forward_landscape")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Forward5,
+                                                contentDescription = "Avançar 5 segundos",
+                                                tint = Color.White.copy(alpha = 0.85f),
                                                 modifier = Modifier.size(16.dp)
                                             )
                                         }
@@ -1144,6 +1261,7 @@ fun EditorScreen(
                                     canRedo = uiState.canRedo,
                                     onSeek = { viewModel.seekTo(it) },
                                     onDragStart = { viewModel.pausePlayback() },
+                                    highResPositionFlow = viewModel.playerManager.highResPositionMs,
                                     onSelectClip = { clipId ->
                                         viewModel.selectClip(clipId, seekToClipStart = false)
                                         viewModel.setActivePanel(ToolPanel.EDIT_TOOLS)
@@ -1327,6 +1445,11 @@ fun EditorScreen(
                                                     ToolPanel.FILES -> "Arquivos de Mídia"
                                                     ToolPanel.CAPTIONS -> "Legendas Automáticas"
                                                     ToolPanel.CROP -> "Recortar Clipe"
+                                                    ToolPanel.KEYFRAME -> "Keyframes (Animação)"
+                                                    ToolPanel.VOICE_EFFECT -> "Efeitos de Voz"
+                                                    ToolPanel.PIP -> "Camada PIP (Picture-in-Picture)"
+                                                    ToolPanel.ANIMATION -> "Animações do Clipe"
+                                                    ToolPanel.CHROMA_KEY -> "Chroma Key (Remover Fundo)"
                                                     else -> "Ferramenta"
                                                 },
                                                 color = TextPrimary,
@@ -1365,6 +1488,15 @@ fun EditorScreen(
                                                     )
                                                 })
                                                 ToolPanel.CROP -> ClipCropPanel(currentClip, viewModel)
+                                                ToolPanel.KEYFRAME -> KeyframePanel(currentClip, viewModel)
+                                                ToolPanel.VOICE_EFFECT -> VoiceEffectPanel(currentClip, uiState.selectedAudioTrackId, project, viewModel)
+                                                ToolPanel.PIP -> PipPanel(viewModel, onLaunchPicker = {
+                                                    photoVideoPickerLauncher.launch(
+                                                        androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                                    )
+                                                })
+                                                ToolPanel.ANIMATION -> ClipAnimationPanel(currentClip, viewModel)
+                                                ToolPanel.CHROMA_KEY -> ClipChromaKeyPanel(currentClip, viewModel)
                                                 else -> {}
                                             }
                                         }
@@ -1383,8 +1515,10 @@ fun EditorScreen(
                                         ToolButton(icon = Icons.Default.ContentCut, label = "Editar", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.EDIT_TOOLS) })
                                         ToolButton(icon = Icons.Default.MusicNote, label = "Áudio", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.AUDIO) })
                                         ToolButton(icon = Icons.Default.TextFields, label = "Texto", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.TEXT) })
-                                        ToolButton(icon = Icons.Default.Layers, label = "Sobrepor", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.STICKER) })
+                                        ToolButton(icon = Icons.Default.Layers, label = "PIP (Camada)", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.PIP) })
+                                        ToolButton(icon = Icons.Default.EmojiEmotions, label = "Stickers", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.STICKER) })
                                         ToolButton(icon = Icons.Default.AutoAwesome, label = "Efeitos", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.VFX) })
+                                        ToolButton(icon = Icons.Default.RecordVoiceOver, label = "Voz", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.VOICE_EFFECT) })
                                         ToolButton(icon = Icons.Default.Shuffle, label = "Transição", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.TRANSITION) })
                                         ToolButton(icon = Icons.Default.FilterFrames, label = "Filtros", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.FILTER) })
                                         ToolButton(icon = Icons.Default.Tune, label = "Ajustes", isCompact = true, onClick = { viewModel.setActivePanel(ToolPanel.ADJUST) })
@@ -1528,9 +1662,11 @@ private fun VideoPreviewContent(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Subtitles overlay
-        val activeSubtitle = project.subtitles.find {
-            uiState.currentPositionMs in it.startTimeMs..it.endTimeMs && it.isEnabled
+        // Subtitles overlay memoized to avoid linear scan every compose pass
+        val activeSubtitle = remember(project.subtitles, uiState.currentPositionMs) {
+            project.subtitles.find {
+                uiState.currentPositionMs in it.startTimeMs..it.endTimeMs && it.isEnabled
+            }
         }
         if (activeSubtitle != null) {
             Box(
@@ -2061,24 +2197,171 @@ private fun ToolButton(
 
 @Composable
 private fun SpeedPanel(clip: MediaClip?, viewModel: EditorViewModel) {
-    val speed = clip?.speed ?: 1.0f
-    Column {
-        Text("Velocidade do Clipe: ${speed}x", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(modifier = Modifier.height(10.dp))
+    if (clip == null) {
+        Text("Selecione um clipe para ajustar a velocidade.", color = TextSecondary, fontSize = 13.sp)
+        return
+    }
+    var selectedTab by remember { mutableIntStateOf(if (clip.speedCurve != "Padrão") 1 else 0) }
+    var currentSpeed by remember(clip.id, clip.speed) { mutableFloatStateOf(clip.speed) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf(0.2f, 0.5f, 1.0f, 1.5f, 2.0f, 4.0f).forEach { s ->
-                val isSel = speed == s
-                Button(
-                    onClick = { viewModel.updateClipSpeed(s) },
-                    colors = ButtonDefaults.buttonColors(containerColor = if (isSel) PrimaryPurple else SurfaceDark),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Text("${s}x", fontSize = 12.sp, color = if (isSel) Color.White else TextSecondary)
+            Surface(
+                onClick = { selectedTab = 0 },
+                shape = RoundedCornerShape(10.dp),
+                color = if (selectedTab == 0) PrimaryPurpleSoft else SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, if (selectedTab == 0) PrimaryPurple else BorderStrong),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    "Padrão (Linear)",
+                    color = if (selectedTab == 0) Color.White else TextSecondary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(vertical = 7.dp)
+                )
+            }
+            Surface(
+                onClick = { selectedTab = 1 },
+                shape = RoundedCornerShape(10.dp),
+                color = if (selectedTab == 1) PrimaryPurpleSoft else SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, if (selectedTab == 1) PrimaryPurple else BorderStrong),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    "Curvas (CapCut)",
+                    color = if (selectedTab == 1) Color.White else TextSecondary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(vertical = 7.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        if (selectedTab == 0) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Velocidade Linear", color = TextSecondary, fontSize = 12.sp)
+                Text(
+                    String.format(java.util.Locale.US, "%.1fx", currentSpeed),
+                    color = PrimaryPurpleVariant,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            }
+            Slider(
+                value = currentSpeed,
+                onValueChange = {
+                    currentSpeed = it
+                    viewModel.updateClipSpeed(it, clip.id)
+                },
+                valueRange = 0.1f..10.0f,
+                colors = SliderDefaults.colors(thumbColor = PrimaryPurple, activeTrackColor = PrimaryPurple)
+            )
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(listOf(0.1f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 5.0f, 10.0f)) { s ->
+                    val isSel = kotlin.math.abs(currentSpeed - s) < 0.05f
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isSel) PrimaryPurple else SurfaceDark,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurpleVariant else BorderStrong),
+                        modifier = Modifier.clickable {
+                            currentSpeed = s
+                            viewModel.updateClipSpeed(s, clip.id)
+                        }
+                    ) {
+                        Text(
+                            "${s}x",
+                            fontSize = 11.sp,
+                            color = if (isSel) Color.White else TextPrimary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+        } else {
+            val curves = listOf(
+                "Montagem" to "Rápido início/fim, lento no meio",
+                "Bala" to "Câmera ultra lenta dramática",
+                "Herói" to "Abertura lenta com explosão veloz",
+                "Flash In" to "Aceleração de impacto na entrada",
+                "Flash Out" to "Saída veloz e enérgica",
+                "Salto" to "Ondas dinâmicas de velocidade"
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(curves) { (name, desc) ->
+                    val isSel = clip.speedCurve == name
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSel) PrimaryPurpleSoft else SurfaceDark,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurple else BorderStrong),
+                        modifier = Modifier
+                            .width(135.dp)
+                            .clickable { viewModel.updateClipSpeedCurve(name, clip.id) }
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Canvas(modifier = Modifier.size(width = 90.dp, height = 30.dp)) {
+                                val w = size.width
+                                val h = size.height
+                                val path = androidx.compose.ui.graphics.Path()
+                                when (name) {
+                                    "Montagem" -> {
+                                        path.moveTo(0f, h * 0.2f)
+                                        path.cubicTo(w * 0.3f, h * 0.2f, w * 0.4f, h * 0.8f, w * 0.5f, h * 0.8f)
+                                        path.cubicTo(w * 0.6f, h * 0.8f, w * 0.7f, h * 0.2f, w, h * 0.2f)
+                                    }
+                                    "Bala" -> {
+                                        path.moveTo(0f, h * 0.5f)
+                                        path.lineTo(w * 0.2f, h * 0.5f)
+                                        path.lineTo(w * 0.5f, h * 0.9f)
+                                        path.lineTo(w * 0.8f, h * 0.2f)
+                                        path.lineTo(w, h * 0.2f)
+                                    }
+                                    "Herói" -> {
+                                        path.moveTo(0f, h * 0.8f)
+                                        path.cubicTo(w * 0.4f, h * 0.8f, w * 0.6f, h * 0.1f, w, h * 0.1f)
+                                    }
+                                    "Flash In" -> {
+                                        path.moveTo(0f, h * 0.1f)
+                                        path.cubicTo(w * 0.3f, h * 0.1f, w * 0.5f, h * 0.7f, w, h * 0.7f)
+                                    }
+                                    "Flash Out" -> {
+                                        path.moveTo(0f, h * 0.7f)
+                                        path.cubicTo(w * 0.5f, h * 0.7f, w * 0.7f, h * 0.1f, w, h * 0.1f)
+                                    }
+                                    else -> {
+                                        path.moveTo(0f, h * 0.3f)
+                                        path.lineTo(w * 0.5f, h * 0.8f)
+                                        path.lineTo(w, h * 0.3f)
+                                    }
+                                }
+                                drawPath(
+                                    path = path,
+                                    color = if (isSel) PrimaryPurpleVariant else Color.LightGray,
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(name, color = if (isSel) Color.White else TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text(desc, color = TextTertiary, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                 }
             }
         }
@@ -2704,13 +2987,24 @@ private fun AudioPanel(viewModel: EditorViewModel) {
             }
         }
 
-        // Preset Audio Library
-        Text(
-            text = "Biblioteca de Áudio",
-            color = TextPrimary,
-            fontWeight = FontWeight.Bold,
-            fontSize = 13.sp
-        )
+        // Preset Audio Library & CapCut SFX
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Músicas & Trilhas",
+                color = TextPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
+            )
+            Text(
+                text = "Toque para adicionar à agulha",
+                color = TextTertiary,
+                fontSize = 11.sp
+            )
+        }
         Spacer(modifier = Modifier.height(8.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             items(MockData.audioTracks) { track ->
@@ -2733,6 +3027,50 @@ private fun AudioPanel(viewModel: EditorViewModel) {
                             Text(track.name, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         }
                         Text("${track.category} • ${track.duration}", color = TextTertiary, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // CapCut Sound Effects (SFX)
+        Text(
+            text = "Efeitos Sonoros (SFX)",
+            color = TextPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        val soundEffects = listOf(
+            Triple("Swoosh Transição", "Transição", 800L),
+            Triple("Pop Bolha", "Clicks", 500L),
+            Triple("Risadas Plateia", "Reações", 3200L),
+            Triple("Aplausos", "Reações", 2800L),
+            Triple("Ding Sucesso", "Sino", 1200L),
+            Triple("Glitch Cibernético", "Distorção", 1000L),
+            Triple("Impacto Boom", "Batida", 2000L)
+        )
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(soundEffects) { (name, cat, dur) ->
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF1E293B),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
+                    modifier = Modifier.clickable {
+                        viewModel.addSoundEffectPreset(name, cat, dur)
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Audiotrack, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Column {
+                            Text(name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("$cat • ${dur / 1000f}s", color = TextTertiary, fontSize = 9.sp)
+                        }
                     }
                 }
             }
@@ -3427,29 +3765,129 @@ private fun TransitionPanel(clip: MediaClip?, viewModel: EditorViewModel) {
 
 @Composable
 private fun CanvasPanel(project: ProjectItem, viewModel: EditorViewModel) {
-    Column {
-        Text("Proporção do Vídeo", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(modifier = Modifier.height(10.dp))
+    var selectedTab by remember { mutableIntStateOf(0) }
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            AspectRatio.entries.forEach { ratio ->
-                val isSel = project.aspectRatio == ratio
+            listOf("Proporção", "Cor de Fundo", "Desfoque").forEachIndexed { index, label ->
+                val isSel = selectedTab == index
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
+                    onClick = { selectedTab = index },
+                    shape = RoundedCornerShape(8.dp),
                     color = if (isSel) PrimaryPurple else SurfaceDark,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable { viewModel.setAspectRatio(ratio) }
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurpleVariant else BorderStrong),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(ratio.label, fontWeight = FontWeight.Bold, color = if (isSel) Color.White else TextPrimary, fontSize = 13.sp)
+                    Text(
+                        label,
+                        color = if (isSel) Color.White else TextSecondary,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(vertical = 7.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        when (selectedTab) {
+            0 -> {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(AspectRatio.entries) { ratio ->
+                        val isSel = project.aspectRatio == ratio
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSel) PrimaryPurpleSoft else SurfaceDark,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurple else BorderStrong),
+                            modifier = Modifier
+                                .width(80.dp)
+                                .clickable { viewModel.setAspectRatio(ratio) }
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AspectRatio,
+                                    contentDescription = null,
+                                    tint = if (isSel) PrimaryPurpleVariant else TextSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(ratio.label, fontWeight = FontWeight.Bold, color = if (isSel) Color.White else TextPrimary, fontSize = 12.sp)
+                            }
+                        }
                     }
                 }
+            }
+            1 -> {
+                val colors = listOf(
+                    "#000000" to "Preto",
+                    "#1E1B4B" to "Roxo Escuro",
+                    "#0F172A" to "Azul Noite",
+                    "#18181B" to "Chumbo",
+                    "#3F3F46" to "Cinza",
+                    "#450A0A" to "Vinho",
+                    "#064E3B" to "Verde",
+                    "#FFFFFF" to "Branco"
+                )
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(colors) { (hex, name) ->
+                        val isSel = project.canvasColorHex.equals(hex, ignoreCase = true)
+                        val colorObj = try { Color(android.graphics.Color.parseColor(hex)) } catch (_: Exception) { Color.Black }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = SurfaceDark,
+                            border = androidx.compose.foundation.BorderStroke(2.dp, if (isSel) PrimaryPurpleVariant else BorderStrong),
+                            modifier = Modifier
+                                .clickable { viewModel.updateCanvasBackground(hex, project.canvasBlurLevel) }
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(colorObj)
+                                        .border(1.dp, Color.Gray, CircleShape)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(name, fontSize = 10.sp, color = if (isSel) PrimaryPurpleVariant else TextSecondary)
+                            }
+                        }
+                    }
+                }
+            }
+            2 -> {
+                var blurVal by remember(project.canvasBlurLevel) { mutableFloatStateOf(project.canvasBlurLevel) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Nível de Desfoque do Fundo", color = TextSecondary, fontSize = 12.sp)
+                    Text("${blurVal.toInt()}%", color = PrimaryPurpleVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = blurVal,
+                    onValueChange = {
+                        blurVal = it
+                        viewModel.updateCanvasBackground(project.canvasColorHex, it)
+                    },
+                    valueRange = 0f..100f,
+                    colors = SliderDefaults.colors(thumbColor = PrimaryPurple, activeTrackColor = PrimaryPurple)
+                )
             }
         }
     }
@@ -3766,6 +4204,220 @@ private fun TrimPanel(clip: MediaClip?, viewModel: EditorViewModel) {
 }
 
 @Composable
+private fun KeyframePanel(clip: MediaClip?, viewModel: EditorViewModel) {
+    if (clip == null) {
+        Text("Selecione um clipe na timeline para animar com Keyframes.", color = TextSecondary, fontSize = 13.sp)
+        return
+    }
+
+    val keyframes = clip.keyframes.sortedBy { it.timeMs }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Diamond, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Animação por Keyframes", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+            Button(
+                onClick = { viewModel.toggleKeyframeAtPlayhead(clip.id) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFBBF24)),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.height(30.dp)
+            ) {
+                Text("+ Keyframe Aqui", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Posicione a agulha na timeline e adicione pontos de animação de zoom, rotação e posição.",
+            color = TextTertiary,
+            fontSize = 11.sp
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        if (keyframes.isEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = SurfaceDark,
+                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.Animation, contentDescription = null, tint = TextTertiary, modifier = Modifier.size(28.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("Nenhum keyframe adicionado ainda", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Text("Toque no botão de losango na prévia para marcar pontos", color = TextTertiary, fontSize = 10.sp)
+                }
+            }
+        } else {
+            Text("Pontos marcados no clipe (${keyframes.size}):", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(modifier = Modifier.height(6.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(keyframes) { kf ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF1E293B),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFBBF24)),
+                        modifier = Modifier.clickable {
+                            val clipIdx = viewModel.uiState.value.currentProject?.clips?.indexOfFirst { it.id == clip.id } ?: 0
+                            val clipStart = com.example.util.TimelineUtils.getClipStartTimelineMs(viewModel.uiState.value.currentProject?.clips ?: emptyList(), clipIdx)
+                            viewModel.seekTo(clipStart + kf.timeMs)
+                        }
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("${String.format("%.2f", kf.timeMs / 1000f)}s", color = Color(0xFFFBBF24), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Zoom ${(kf.scale * 100).toInt()}% • ${kf.rotation.toInt()}°", color = TextTertiary, fontSize = 9.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceEffectPanel(
+    clip: MediaClip?,
+    selectedAudioId: String?,
+    project: ProjectItem,
+    viewModel: EditorViewModel
+) {
+    val voiceEffects = listOf(
+        "Normal" to "Natural / Sem efeito",
+        "Esquilo" to "Tom agudo e rápido (Chipmunk)",
+        "Monstro" to "Tom grave e profundo (Deep)",
+        "Eco" to "Eco espacial e reverberação",
+        "Robô" to "Frequência metálica sintetizada",
+        "Telefone" to "Filtro passa-faixa telefônico"
+    )
+
+    val currentEffect = clip?.voiceEffect ?: "Normal"
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Efeitos e Modificadores de Voz", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("Transforme o timbre vocal e o tom do clipe ou áudio", color = TextTertiary, fontSize = 11.sp)
+            }
+            if (currentEffect != "Normal") {
+                TextButton(onClick = { viewModel.updateClipVoiceEffect("Normal", clip?.id) }) {
+                    Text("Redefinir", color = DangerRed, fontSize = 12.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(voiceEffects) { (name, desc) ->
+                val isSel = currentEffect == name
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isSel) PrimaryPurpleSoft else SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurple else BorderStrong),
+                    modifier = Modifier
+                        .clickable {
+                            viewModel.updateClipVoiceEffect(name, clip?.id)
+                            if (selectedAudioId != null) {
+                                viewModel.updateAudioTrackVoiceEffect(name, selectedAudioId)
+                            }
+                        }
+                        .testTag("voice_effect_$name")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = when (name) {
+                                "Esquilo" -> Icons.Default.GraphicEq
+                                "Monstro" -> Icons.Default.Hearing
+                                "Eco" -> Icons.Default.SurroundSound
+                                "Robô" -> Icons.Default.SmartToy
+                                "Telefone" -> Icons.Default.PhoneInTalk
+                                else -> Icons.Default.Mic
+                            },
+                            contentDescription = name,
+                            tint = if (isSel) PrimaryPurpleVariant else TextSecondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(name, color = if (isSel) Color.White else TextPrimary, fontSize = 12.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium)
+                        Text(desc.take(18), color = TextTertiary, fontSize = 9.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PipPanel(
+    viewModel: EditorViewModel,
+    onLaunchPicker: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("PIP - Camada Sobreposta (Picture-in-Picture)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("Adicione vídeos e imagens da sua galeria como sobreposições", color = TextTertiary, fontSize = 11.sp)
+            }
+            Button(
+                onClick = onLaunchPicker,
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryPurple),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.testTag("pip_import_button")
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("+ Adicionar Camada", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = SurfaceDark,
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Layers, contentDescription = null, tint = AccentPink, modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text("Suporta múltiplos vídeos e fotos simultâneos", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Redimensione, gire e anime na prévia usando gestos de pinça ou alças", color = TextTertiary, fontSize = 10.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ClipCropPanel(clip: MediaClip?, viewModel: EditorViewModel) {
     if (clip == null) {
         Text("Selecione um clipe na timeline para recortar.", color = TextSecondary, fontSize = 13.sp)
@@ -3828,6 +4480,225 @@ private fun ClipCropPanel(clip: MediaClip?, viewModel: EditorViewModel) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ClipAnimationPanel(clip: MediaClip?, viewModel: EditorViewModel) {
+    if (clip == null) {
+        Text("Selecione um clipe para aplicar animações.", color = TextSecondary, fontSize = 13.sp)
+        return
+    }
+
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var duration by remember(clip.id, clip.animationDurationMs) { mutableFloatStateOf(clip.animationDurationMs.toFloat()) }
+
+    val animInList = listOf("Nenhum", "Fade In", "Zoom In", "Deslizar Direita", "Deslizar Cima", "Pop In")
+    val animOutList = listOf("Nenhum", "Fade Out", "Zoom Out", "Deslizar Baixo", "Deslizar Esquerda")
+    val animComboList = listOf("Nenhum", "Balanço", "Pêndulo", "Zoom Bounce", "Giro 3D")
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("Entrada", "Saída", "Combo").forEachIndexed { idx, label ->
+                val isSel = selectedTab == idx
+                Surface(
+                    onClick = { selectedTab = idx },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isSel) PrimaryPurple else SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurpleVariant else BorderStrong),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        label,
+                        color = if (isSel) Color.White else TextSecondary,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(vertical = 7.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        val currentList = when (selectedTab) {
+            0 -> animInList
+            1 -> animOutList
+            else -> animComboList
+        }
+        val currentSelected = when (selectedTab) {
+            0 -> clip.animationIn
+            1 -> clip.animationOut
+            else -> clip.animationCombo
+        }
+
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(currentList) { anim ->
+                val isSel = currentSelected == anim
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isSel) PrimaryPurpleSoft else SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) PrimaryPurple else BorderStrong),
+                    modifier = Modifier.clickable {
+                        val typeStr = when (selectedTab) {
+                            0 -> "IN"
+                            1 -> "OUT"
+                            else -> "COMBO"
+                        }
+                        viewModel.updateClipAnimation(typeStr, anim, duration.toLong(), clip.id)
+                    }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = when (anim) {
+                                "Nenhum" -> Icons.Default.Block
+                                "Fade In", "Fade Out" -> Icons.Default.Gradient
+                                "Zoom In", "Zoom Out" -> Icons.Default.ZoomIn
+                                else -> Icons.Default.MovieFilter
+                            },
+                            contentDescription = anim,
+                            tint = if (isSel) PrimaryPurpleVariant else TextSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(anim, color = if (isSel) Color.White else TextPrimary, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Duração da Animação", color = TextSecondary, fontSize = 12.sp)
+            Text("${String.format(java.util.Locale.US, "%.1f", duration / 1000f)}s", color = PrimaryPurpleVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        Slider(
+            value = duration,
+            onValueChange = {
+                duration = it
+                val typeStr = when (selectedTab) {
+                    0 -> "IN"
+                    1 -> "OUT"
+                    else -> "COMBO"
+                }
+                viewModel.updateClipAnimation(typeStr, currentSelected, it.toLong(), clip.id)
+            },
+            valueRange = 100f..3000f,
+            colors = SliderDefaults.colors(thumbColor = PrimaryPurple, activeTrackColor = PrimaryPurple)
+        )
+    }
+}
+
+@Composable
+private fun ClipChromaKeyPanel(clip: MediaClip?, viewModel: EditorViewModel) {
+    if (clip == null) {
+        Text("Selecione um clipe para usar o Chroma Key.", color = TextSecondary, fontSize = 13.sp)
+        return
+    }
+
+    var intensity by remember(clip.id, clip.chromaKeyIntensity) { mutableFloatStateOf(clip.chromaKeyIntensity) }
+    var shadow by remember(clip.id, clip.chromaKeyShadow) { mutableFloatStateOf(clip.chromaKeyShadow) }
+    var selectedColor by remember(clip.id, clip.chromaKeyColor) { mutableStateOf(clip.chromaKeyColor.ifBlank { "#00FF00" }) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Cor a Remover (Chave de Cor)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            if (clip.chromaKeyIntensity > 0f) {
+                TextButton(onClick = {
+                    intensity = 0f
+                    shadow = 0f
+                    viewModel.updateClipChromaKey("", 0f, 0f, clip.id)
+                }) {
+                    Text("Desativar", color = DangerRed, fontSize = 11.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        val colors = listOf(
+            "#00FF00" to "Verde",
+            "#0000FF" to "Azul",
+            "#000000" to "Preto",
+            "#FFFFFF" to "Branco"
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            colors.forEach { (hex, name) ->
+                val isSel = selectedColor.equals(hex, ignoreCase = true)
+                val c = try { Color(android.graphics.Color.parseColor(hex)) } catch (_: Exception) { Color.Green }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isSel) PrimaryPurpleSoft else SurfaceDark,
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, if (isSel) PrimaryPurple else BorderStrong),
+                    modifier = Modifier.clickable {
+                        selectedColor = hex
+                        if (intensity == 0f) intensity = 50f
+                        viewModel.updateClipChromaKey(hex, intensity, shadow, clip.id)
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(c)
+                                .border(1.dp, Color.Gray, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(name, color = if (isSel) Color.White else TextPrimary, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Intensidade", color = TextSecondary, fontSize = 12.sp)
+            Text("${intensity.toInt()}%", color = PrimaryPurpleVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        Slider(
+            value = intensity,
+            onValueChange = {
+                intensity = it
+                viewModel.updateClipChromaKey(selectedColor, it, shadow, clip.id)
+            },
+            valueRange = 0f..100f,
+            colors = SliderDefaults.colors(thumbColor = PrimaryPurple, activeTrackColor = PrimaryPurple)
+        )
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Sombra / Borda", color = TextSecondary, fontSize = 12.sp)
+            Text("${shadow.toInt()}%", color = PrimaryPurpleVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        Slider(
+            value = shadow,
+            onValueChange = {
+                shadow = it
+                viewModel.updateClipChromaKey(selectedColor, intensity, it, clip.id)
+            },
+            valueRange = 0f..100f,
+            colors = SliderDefaults.colors(thumbColor = PrimaryPurple, activeTrackColor = PrimaryPurple)
+        )
     }
 }
 

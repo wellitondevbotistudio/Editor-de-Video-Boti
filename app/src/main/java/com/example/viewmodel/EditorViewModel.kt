@@ -40,7 +40,12 @@ enum class ToolPanel {
     LAYERS,
     TRANSFORM,
     CROP,
-    FILES
+    FILES,
+    KEYFRAME,
+    VOICE_EFFECT,
+    PIP,
+    ANIMATION,
+    CHROMA_KEY
 }
 
 data class EditorUiState(
@@ -848,13 +853,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun duplicateSelectedElement() {
         val state = _uiState.value
         when {
-            state.selectedStickerId != null -> duplicateSticker(state.selectedStickerId)
             state.selectedTextId != null -> duplicateTextOverlay(state.selectedTextId)
+            state.selectedStickerId != null -> duplicateSticker(state.selectedStickerId)
             state.selectedAudioTrackId != null -> duplicateAudioTrack(state.selectedAudioTrackId)
             state.selectedClipId != null -> duplicateMainClip(state.selectedClipId)
             else -> {
-                val cur = _uiState.value.currentProject ?: return
-                cur.clips.firstOrNull()?.let { duplicateMainClip(it.id) }
+                setFeedback("Selecione um elemento para duplicar")
             }
         }
     }
@@ -1204,6 +1208,235 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val newFlip = !targetClip.flipVertical
         updateClipTransform(flipVertical = newFlip, clipId = targetId)
         setFeedback(if (newFlip) "Espelhado verticalmente" else "Espelhamento vertical removido")
+    }
+
+    // ---------------- CAPCUT PRO FUNCTIONS ----------------
+
+    fun extractAudioFromSelectedClip(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: cur.clips.firstOrNull()?.id ?: return
+        val clipIndex = cur.clips.indexOfFirst { it.id == targetId }
+        if (clipIndex == -1) return
+        val clip = cur.clips[clipIndex]
+
+        val clipStartMs = TimelineUtils.getClipStartTimelineMs(cur.clips, clipIndex)
+        val clipDuration = TimelineUtils.calculateClipTimelineDuration(clip)
+        val totalSecs = (clipDuration / 1000).toInt()
+        val durationStr = String.format(java.util.Locale.US, "%02d:%02d", totalSecs / 60, totalSecs % 60)
+
+        val newAudio = AudioTrackItem(
+            id = "audio_ext_" + UUID.randomUUID().toString().take(6),
+            name = "Áudio - ${clip.title.ifBlank { "Clipe ${clipIndex + 1}" }}",
+            category = "Extraído",
+            duration = durationStr,
+            durationMs = if (clip.originalDurationMs > 0) clip.originalDurationMs else clip.durationMs,
+            uri = clip.uri,
+            localPath = clip.localPath,
+            timelineStartMs = clipStartMs,
+            trimStartMs = clip.trimStartMs,
+            trimEndMs = clip.trimEndMs,
+            volume = if (clip.volume > 0.05f) clip.volume else 0.8f
+        )
+
+        // Mutar o áudio do clipe de vídeo para evitar eco/duplicação
+        val updatedClips = cur.clips.map {
+            if (it.id == targetId) it.copy(volume = 0.0f, isMuted = true) else it
+        }
+
+        val updatedProject = cur.copy(
+            clips = updatedClips,
+            audios = cur.audios + newAudio
+        )
+        commitProjectChange(updatedProject)
+        _uiState.update { it.copy(selectedAudioTrackId = newAudio.id, selectedClipId = null) }
+        setFeedback("Áudio extraído para a faixa de som com sucesso!")
+    }
+
+    fun toggleReverseSelectedClip(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == targetId) {
+                clip.copy(isReverse = !clip.isReverse)
+            } else clip
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        val target = updatedClips.find { it.id == targetId }
+        setFeedback(if (target?.isReverse == true) "Modo reverso ativado para o clipe" else "Reprodução normal restaurada")
+    }
+
+    fun toggleMuteClip(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == targetId) {
+                clip.copy(isMuted = !clip.isMuted)
+            } else clip
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        val target = updatedClips.find { it.id == targetId }
+        setFeedback(if (target?.isMuted == true) "Áudio do clipe desativado (Mudo)" else "Áudio do clipe ativado")
+    }
+
+    fun updateClipSpeedCurve(curveName: String, clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val targetSpeed = when (curveName) {
+            "Montagem" -> 1.8f
+            "Bala" -> 0.5f
+            "Herói" -> 2.0f
+            "Flash In" -> 3.0f
+            "Flash Out" -> 2.5f
+            "Salto" -> 1.5f
+            else -> 1.0f
+        }
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == targetId) {
+                val updated = clip.copy(speedCurve = curveName, speed = targetSpeed)
+                val newDur = TimelineUtils.calculateClipTimelineDuration(updated)
+                updated.copy(durationMs = newDur)
+            } else clip
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        if (playerManager.playbackState.value.currentClipId == targetId) {
+            playerManager.exoPlayer.setPlaybackParameters(androidx.media3.common.PlaybackParameters(targetSpeed))
+        }
+        setFeedback("Curva '$curveName' aplicada (${targetSpeed}x)")
+    }
+
+    fun updateClipAnimation(
+        animType: String, // "IN", "OUT", "COMBO"
+        animName: String,
+        durationMs: Long = 500L,
+        clipId: String? = null
+    ) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == targetId) {
+                when (animType.uppercase()) {
+                    "IN" -> clip.copy(animationIn = animName, animationDurationMs = durationMs)
+                    "OUT" -> clip.copy(animationOut = animName, animationDurationMs = durationMs)
+                    "COMBO" -> clip.copy(animationCombo = animName, animationDurationMs = durationMs)
+                    else -> clip.copy(animationIn = animName, animationDurationMs = durationMs)
+                }
+            } else clip
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        setFeedback("Animação '$animName' configurada ($animType)")
+    }
+
+    fun updateClipChromaKey(
+        colorHex: String,
+        intensity: Float,
+        shadow: Float = 0f,
+        clipId: String? = null
+    ) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map { clip ->
+            if (clip.id == targetId) {
+                clip.copy(
+                    chromaKeyColor = colorHex,
+                    chromaKeyIntensity = intensity.coerceIn(0f, 100f),
+                    chromaKeyShadow = shadow.coerceIn(0f, 100f)
+                )
+            } else clip
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        setFeedback("Chroma Key ajustado (Intensidade: ${intensity.toInt()}%)")
+    }
+
+    fun updateCanvasBackground(colorHex: String, blurLevel: Float = 0f) {
+        val cur = _uiState.value.currentProject ?: return
+        val updated = cur.copy(
+            canvasColorHex = colorHex,
+            canvasBlurLevel = blurLevel.coerceIn(0f, 100f)
+        )
+        commitProjectChange(updated)
+        setFeedback("Plano de fundo do vídeo atualizado")
+    }
+
+    fun addSoundEffectPreset(name: String, category: String, durationMs: Long = 1500L) {
+        val cur = _uiState.value.currentProject ?: return
+        val totalSecs = (durationMs / 1000).toInt().coerceAtLeast(1)
+        val durationStr = String.format(java.util.Locale.US, "%02d:%02d", totalSecs / 60, totalSecs % 60)
+        val sfx = AudioTrackItem(
+            id = "sfx_" + UUID.randomUUID().toString().take(6),
+            name = name,
+            category = category,
+            duration = durationStr,
+            durationMs = durationMs,
+            timelineStartMs = _uiState.value.currentPositionMs,
+            volume = 0.9f
+        )
+        commitProjectChange(cur.copy(audios = cur.audios + sfx))
+        _uiState.update { it.copy(selectedAudioTrackId = sfx.id) }
+        setFeedback("Efeito sonoro '$name' adicionado")
+    }
+
+    // ---------------- KEYFRAME & FREEZE FRAME & VOICE EFFECTS ----------------
+
+    fun freezeFrameAtPlayhead() {
+        val cur = _uiState.value.currentProject ?: return
+        val playhead = _uiState.value.currentPositionMs
+        val result = TimelineUtils.insertFreezeFrame(cur.clips, playhead, freezeDurationMs = 3000L) ?: return
+        val (updatedClips, freezeId) = result
+        commitProjectChange(cur.copy(clips = updatedClips))
+        _uiState.update { it.copy(selectedClipId = freezeId) }
+        setFeedback("Quadro congelado inserido (3s)")
+    }
+
+    fun toggleKeyframeAtPlayhead(clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val clipIndex = cur.clips.indexOfFirst { it.id == targetId }
+        if (clipIndex == -1) return
+        val clip = cur.clips[clipIndex]
+
+        val clipStartMs = TimelineUtils.getClipStartTimelineMs(cur.clips, clipIndex)
+        val relativeTimeMs = (_uiState.value.currentPositionMs - clipStartMs).coerceAtLeast(0L)
+
+        // Se já existe um keyframe muito próximo (dentro de 100ms), remove-o (toggle)
+        val existingKf = clip.keyframes.find { kotlin.math.abs(it.timeMs - relativeTimeMs) < 100L }
+        val updatedKeyframes = if (existingKf != null) {
+            clip.keyframes.filterNot { it == existingKf }
+        } else {
+            val newPoint = KeyframePoint(
+                timeMs = relativeTimeMs,
+                scale = clip.scale,
+                rotation = clip.rotation,
+                positionX = clip.positionX,
+                positionY = clip.positionY,
+                opacity = clip.opacity
+            )
+            (clip.keyframes + newPoint).sortedBy { it.timeMs }
+        }
+
+        val updatedClips = cur.clips.toMutableList()
+        updatedClips[clipIndex] = clip.copy(keyframes = updatedKeyframes)
+        commitProjectChange(cur.copy(clips = updatedClips))
+        setFeedback(if (existingKf != null) "Keyframe removido" else "Keyframe adicionado na agulha")
+    }
+
+    fun updateClipVoiceEffect(effectName: String, clipId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = clipId ?: _uiState.value.selectedClipId ?: return
+        val updatedClips = cur.clips.map {
+            if (it.id == targetId) it.copy(voiceEffect = effectName) else it
+        }
+        commitProjectChange(cur.copy(clips = updatedClips))
+        setFeedback("Efeito de voz '$effectName' aplicado")
+    }
+
+    fun updateAudioTrackVoiceEffect(effectName: String, trackId: String? = null) {
+        val cur = _uiState.value.currentProject ?: return
+        val targetId = trackId ?: _uiState.value.selectedAudioTrackId ?: return
+        val updatedAudios = cur.audios.map {
+            if (it.id == targetId) it.copy(voiceEffect = effectName) else it
+        }
+        commitProjectChange(cur.copy(audios = updatedAudios))
+        setFeedback("Efeito de voz '$effectName' aplicado ao áudio")
     }
 
     fun resetClipTransform(clipId: String? = null) {
@@ -1912,7 +2145,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             SubtitleSegmentItem("sub3", "Não se esqueça de curtir e compartilhar!", 8500L, 12000L)
         )
         commitProjectChange(cur.copy(subtitles = generated))
-        setFeedback("Legendas geradas em $language com IA")
+        setFeedback("Legendas automáticas geradas em $language")
     }
 
     fun generateAutoCaptions(language: String = "pt-BR") {

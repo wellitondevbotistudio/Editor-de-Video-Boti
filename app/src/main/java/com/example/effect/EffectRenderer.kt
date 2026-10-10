@@ -50,6 +50,21 @@ fun TransformedMediaContainer(
     val finalScaleX = effectState.scale * (if (effectState.flipHorizontal) -1f else 1f)
     val finalScaleY = effectState.scale * (if (effectState.flipVertical) -1f else 1f)
 
+    // Pré-computa o RenderEffect uma única vez quando as cores mudam,
+    // eliminando alocações contínuas de ColorMatrixColorFilter e Skia RenderEffect por frame de desenho
+    val renderEffectModifier = remember(androidColorMatrix, effectState.hasAdjustments, effectState.hasFilter) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (effectState.hasAdjustments || effectState.hasFilter)) {
+            try {
+                val filter = ColorMatrixColorFilter(androidColorMatrix)
+                RenderEffect.createColorFilterEffect(filter).asComposeRenderEffect()
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -60,27 +75,28 @@ fun TransformedMediaContainer(
                 alpha = effectState.opacity.coerceIn(0f, 1f)
                 translationX = effectState.positionX
                 translationY = effectState.positionY
-
-                // Em dispositivos com Android 12+ (API 31+), o RenderEffect aplica a ColorMatrix
-                // diretamente ao hardware layer da View (incluindo PlayerView/TextureView)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    try {
-                        val filter = ColorMatrixColorFilter(androidColorMatrix)
-                        renderEffect = RenderEffect.createColorFilterEffect(filter).asComposeRenderEffect()
-                    } catch (_: Exception) {
-                        // Fallback suave caso o dispositivo não suporte RenderEffect em hardware
-                    }
-                }
+                renderEffect = renderEffectModifier
             }
     ) {
         // Recorte visual do elemento se cropRatio estiver ativo
-        val cropAspect = when (effectState.cropRatio) {
+        val baseCropAspect = when (effectState.cropRatio) {
             "1:1" -> 1f
             "16:9" -> 16f / 9f
             "9:16" -> 9f / 16f
             "4:5" -> 4f / 5f
             "4:3" -> 4f / 3f
             else -> null
+        }
+
+        // Verifica se a rotação é ortogonal ímpar (90°, 270°, etc.)
+        val normalizedRot = ((effectState.rotation % 360f) + 360f) % 360f
+        val isRotatedOdd = (normalizedRot in 45f..135f) || (normalizedRot in 225f..315f)
+
+        // Se a rotação for de 90° ou 270°, inverte a razão de aspecto alvo mantendo a proporção de corte sem distorção
+        val cropAspect = if (baseCropAspect != null && isRotatedOdd) {
+            1f / baseCropAspect
+        } else {
+            baseCropAspect
         }
 
         if (cropAspect != null) {

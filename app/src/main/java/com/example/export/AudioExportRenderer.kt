@@ -35,8 +35,16 @@ class AudioExportRenderer(
     private val channelCount = config.audioChannels
     private val bitRate = config.audioBitrate
 
-    // Cache de amostras PCM decodificadas para cada fonte de mídia (áudio ou vídeo)
-    private val decodedPcmCache = mutableMapOf<String, ShortArray>()
+    // Cache de amostras PCM decodificadas para cada fonte de mídia (áudio ou vídeo) com limpeza atômica
+    private val decodedPcmCache = java.util.concurrent.ConcurrentHashMap<String, ShortArray>()
+
+    /**
+     * Limpa atomicamente o cache de PCM decodificado liberando memória nativa imediatamente.
+     */
+    fun clearCache() {
+        decodedPcmCache.clear()
+        Log.d(TAG, "Cache de áudio PCM limpo com sucesso.")
+    }
 
     /**
      * Processa, mixa e codifica o áudio do projeto diretamente no [MediaMuxer].
@@ -226,14 +234,15 @@ class AudioExportRenderer(
      * Decodifica um arquivo de mídia real para amostras PCM estéreo de 16 bits usando MediaExtractor e MediaCodec.
      */
     private fun decodeAudioSourceToPcm(sourcePathOrUri: String): ShortArray? {
-        val extractor = MediaExtractor()
+        var extractor: MediaExtractor? = null
+        var decoder: MediaCodec? = null
         return try {
+            extractor = MediaExtractor()
             if (sourcePathOrUri.startsWith("content://") || sourcePathOrUri.startsWith("file://")) {
                 extractor.setDataSource(context, Uri.parse(sourcePathOrUri), null)
             } else {
                 val f = File(sourcePathOrUri)
                 if (!f.exists() || f.length() == 0L) {
-                    extractor.release()
                     return null
                 }
                 extractor.setDataSource(f.absolutePath)
@@ -252,15 +261,15 @@ class AudioExportRenderer(
             }
 
             if (audioTrackIndex < 0 || trackFormat == null) {
-                extractor.release()
                 return null
             }
 
             extractor.selectTrack(audioTrackIndex)
             val mime = trackFormat.getString(MediaFormat.KEY_MIME) ?: return null
-            val decoder = MediaCodec.createDecoderByType(mime)
-            decoder.configure(trackFormat, null, null, 0)
-            decoder.start()
+            val dec = MediaCodec.createDecoderByType(mime)
+            decoder = dec
+            dec.configure(trackFormat, null, null, 0)
+            dec.start()
 
             val srcChannels = if (trackFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
                 trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
@@ -274,25 +283,25 @@ class AudioExportRenderer(
 
             while (!outputEos) {
                 if (!inputEos) {
-                    val inIdx = decoder.dequeueInputBuffer(timeout)
+                    val inIdx = dec.dequeueInputBuffer(timeout)
                     if (inIdx >= 0) {
-                        val inBuf = decoder.getInputBuffer(inIdx)
+                        val inBuf = dec.getInputBuffer(inIdx)
                         if (inBuf != null) {
                             val sampleSize = extractor.readSampleData(inBuf, 0)
                             if (sampleSize < 0) {
-                                decoder.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                dec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 inputEos = true
                             } else {
-                                decoder.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
+                                dec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
                                 extractor.advance()
                             }
                         }
                     }
                 }
 
-                val outIdx = decoder.dequeueOutputBuffer(bufferInfo, timeout)
+                val outIdx = dec.dequeueOutputBuffer(bufferInfo, timeout)
                 if (outIdx >= 0) {
-                    val outBuf = decoder.getOutputBuffer(outIdx)
+                    val outBuf = dec.getOutputBuffer(outIdx)
                     if (outBuf != null && bufferInfo.size > 0) {
                         outBuf.position(bufferInfo.offset)
                         outBuf.limit(bufferInfo.offset + bufferInfo.size)
@@ -313,7 +322,7 @@ class AudioExportRenderer(
                             }
                         }
                     }
-                    decoder.releaseOutputBuffer(outIdx, false)
+                    dec.releaseOutputBuffer(outIdx, false)
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                         outputEos = true
                     }
@@ -322,18 +331,25 @@ class AudioExportRenderer(
                 }
             }
 
-            try {
-                decoder.stop()
-                decoder.release()
-            } catch (_: Exception) {}
-            extractor.release()
-
             Log.i(TAG, "PCM decodificado com sucesso (${decodedList.size} amostras) de $sourcePathOrUri")
             decodedList.toShortArray()
         } catch (e: Exception) {
             Log.w(TAG, "Não foi possível extrair PCM de $sourcePathOrUri: ${e.message}")
-            try { extractor.release() } catch (_: Exception) {}
             null
+        } finally {
+            if (decoder != null) {
+                try {
+                    decoder.stop()
+                } catch (_: Exception) {}
+                try {
+                    decoder.release()
+                } catch (_: Exception) {}
+            }
+            if (extractor != null) {
+                try {
+                    extractor.release()
+                } catch (_: Exception) {}
+            }
         }
     }
 

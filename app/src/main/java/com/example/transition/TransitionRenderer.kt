@@ -44,21 +44,37 @@ fun TransitionAwareMediaSurface(
         return
     }
 
-    val effectiveVFX = remember(activeVFX, isVfxVisible, currentPlayheadMs / 100) {
-        if (isVfxVisible) {
-            activeVFX.filter { effect ->
-                effect.isEnabled && currentPlayheadMs >= effect.startTimeMs && currentPlayheadMs < (effect.startTimeMs + effect.durationMs)
-            }
-        } else emptyList()
+    // Otimização: verifica se existem transições reais configuradas no projeto antes de computar janelas temporais
+    val hasTransitions = remember(clips) {
+        clips.any { !it.transition.isNullOrBlank() && it.transition != "Nenhum" && it.transition != "None" }
     }
-    val activeTransition = remember(clips, currentPlayheadMs / 50) {
-        TransitionEngine.findActiveTransition(clips, currentPlayheadMs)
+
+    val activeTransition = if (hasTransitions) {
+        remember(clips, currentPlayheadMs / 50) {
+            TransitionEngine.findActiveTransition(clips, currentPlayheadMs)
+        }
+    } else {
+        null
+    }
+
+    // Otimização: só filtra VFX se houver efeitos habilitados na lista
+    val hasVfx = isVfxVisible && activeVFX.isNotEmpty() && activeVFX.any { it.isEnabled }
+    val effectiveVFX = if (hasVfx) {
+        remember(activeVFX, isVfxVisible, currentPlayheadMs / 150) {
+            activeVFX.filter { effect ->
+                effect.isEnabled && currentPlayheadMs in effect.startTimeMs until (effect.startTimeMs + effect.durationMs)
+            }
+        }
+    } else {
+        emptyList()
     }
 
     Box(modifier = modifier.fillMaxSize().clipToBounds()) {
         if (activeTransition != null) {
             // Renderiza Clip A com transformação da transição
-            val effectStateA = ClipEffectState.fromClip(activeTransition.clipA, effectiveVFX)
+            val effectStateA = remember(activeTransition.clipA, effectiveVFX) {
+                ClipEffectState.fromClip(activeTransition.clipA, effectiveVFX)
+            }
             val transformA = activeTransition.transformA
 
             Box(
@@ -82,7 +98,9 @@ fun TransitionAwareMediaSurface(
             }
 
             // Renderiza Clip B com transformação da transição
-            val effectStateB = ClipEffectState.fromClip(activeTransition.clipB, effectiveVFX)
+            val effectStateB = remember(activeTransition.clipB, effectiveVFX) {
+                ClipEffectState.fromClip(activeTransition.clipB, effectiveVFX)
+            }
             val transformB = activeTransition.transformB
 
             Box(
@@ -105,8 +123,10 @@ fun TransitionAwareMediaSurface(
                 )
             }
         } else if (activeClip != null) {
-            // Renderização padrão sem transição
-            val effectState = ClipEffectState.fromClip(activeClip, effectiveVFX)
+            // Renderização padrão sem transição (fluxo de alta performance estável)
+            val effectState = remember(activeClip, effectiveVFX) {
+                ClipEffectState.fromClip(activeClip, effectiveVFX)
+            }
             TransformedMediaContainer(
                 effectState = effectState,
                 modifier = Modifier.fillMaxSize()

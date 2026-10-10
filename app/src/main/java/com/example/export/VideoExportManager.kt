@@ -8,7 +8,9 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import com.example.model.ProjectItem
+import com.example.util.AppLogger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
@@ -67,6 +69,7 @@ class VideoExportManager(
         val audioRenderer = AudioExportRenderer(context, config)
         val pipeline = Mp4EncoderPipeline(context, config)
 
+        var isExportCompletedSuccessfully = false
         try {
             val result = pipeline.encode(
                 timeline = timeline,
@@ -90,10 +93,26 @@ class VideoExportManager(
                 )
             )
 
+            isExportCompletedSuccessfully = result.success
             result.copy(mediaStoreUri = mediaStoreUri?.toString())
 
         } finally {
             frameRenderer.close()
+            audioRenderer.clearCache()
+            if (!isExportCompletedSuccessfully) {
+                withContext(NonCancellable) {
+                    try {
+                        if (outputFile.exists()) {
+                            val deleted = outputFile.delete()
+                            if (deleted) {
+                                AppLogger.i("VideoExport", "Arquivo temporário cancelado removido com sucesso: ${outputFile.name}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        AppLogger.w("VideoExport", "Falha ao remover arquivo temporário após cancelamento/erro: ${e.message}")
+                    }
+                }
+            }
         }
     }
 

@@ -27,6 +27,7 @@ data class StickerEntity(
     val isGif: Boolean = false,
     val startTimeMs: Long = 0L,
     val durationMs: Long = 3000L,
+    val trimStartMs: Long = 0L,
     val posX: Float = 0.5f,
     val posY: Float = 0.5f,
     val scale: Float = 1.0f,

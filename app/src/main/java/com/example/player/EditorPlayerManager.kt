@@ -8,6 +8,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.ui.PlayerView
 import com.example.model.AudioTrackItem
 import com.example.model.MediaClip
@@ -57,8 +58,10 @@ class EditorPlayerManager(
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
         .setLoadControl(loadControl)
+        .setSeekParameters(SeekParameters.EXACT)
         .build().apply {
             playWhenReady = false
+            setSeekParameters(SeekParameters.EXACT)
         }
 
     // Instância estável e reutilizável de PlayerView para evitar reinflações de layout e cortes de codec
@@ -68,6 +71,7 @@ class EditorPlayerManager(
     fun getOrCreatePlayerView(ctx: Context): PlayerView {
         val existing = cachedPlayerView
         if (existing != null && existing.context == ctx) {
+            (existing.parent as? android.view.ViewGroup)?.removeView(existing)
             if (existing.player != exoPlayer) {
                 existing.player = exoPlayer
             }
@@ -297,7 +301,8 @@ class EditorPlayerManager(
     }
 
     fun pause() {
-        _playbackState.update { it.copy(isPlaying = false) }
+        val currentExactPos = _highResPositionMs.value
+        _playbackState.update { it.copy(isPlaying = false, currentPositionMs = currentExactPos) }
         exoPlayer.pause()
         audioSyncManager.pauseAll()
         stopTracking()
@@ -491,8 +496,11 @@ class EditorPlayerManager(
                 TimelineUtils.getEffectiveTrimEnd(clip)
             )
             val currentExoPos = exoPlayer.currentPosition
-            if (isDifferentSource || kotlin.math.abs(currentExoPos - clampedSourcePosition) > 200L) {
+            if (isDifferentSource || kotlin.math.abs(currentExoPos - clampedSourcePosition) > 10L) {
                 exoPlayer.seekTo(clampedSourcePosition)
+            }
+            if (expectedGen != null) {
+                confirmedSeekGeneration = expectedGen
             }
 
             if (_playbackState.value.isPlaying) {
@@ -612,21 +620,23 @@ class EditorPlayerManager(
         trackingJob?.cancel()
         trackingJob = coroutineScope.launch {
             var lastUiStateEmitTime = 0L
+            var lastAudioSyncTime = 0L
 
             while (isActive) {
-                // Cadência otimizada sincronizada (~30-33ms / ~30fps) para eliminar o recomposition storm
+                // Cadência otimizada sincronizada (~30-33ms / ~30fps) para o playhead de alta resolução
                 delay(32)
                 if (!_playbackState.value.isPlaying) continue
 
+                val now = System.currentTimeMillis()
+
                 // Transição suave inter-clipes sem pausar ou reiniciar a linha do tempo
                 if (isInterClipSwitching) {
-                    val now = System.currentTimeMillis()
                     val deltaMs = (now - lastMasterTickTime).coerceIn(0L, 80L)
                     lastMasterTickTime = now
 
                     val currentPos = _highResPositionMs.value
                     val nextPos = currentPos + deltaMs
-                    val totalDuration = TimelineUtils.calculateTotalProjectDuration(activeClips, activeAudios, activeTexts, activeStickers)
+                    val totalDuration = getTotalDuration()
 
                     if (nextPos >= totalDuration) {
                         pause()
@@ -635,13 +645,16 @@ class EditorPlayerManager(
                         onTimelinePositionChanged?.invoke(totalDuration)
                     } else {
                         _highResPositionMs.value = nextPos
-                        val elapsedSinceUiEmit = now - lastUiStateEmitTime
-                        if (elapsedSinceUiEmit >= 100L) {
+                        // Throttle para atualizações estruturais de UI (250ms) evitando recomposition storm
+                        if (now - lastUiStateEmitTime >= 250L) {
                             _playbackState.update { it.copy(currentPositionMs = nextPos) }
                             lastUiStateEmitTime = now
                         }
                         onTimelinePositionChanged?.invoke(nextPos)
-                        audioSyncManager.syncWithMasterPlayhead(nextPos, isMasterPlaying = true)
+                        if (now - lastAudioSyncTime >= 120L) {
+                            audioSyncManager.syncWithMasterPlayhead(nextPos, isMasterPlaying = true)
+                            lastAudioSyncTime = now
+                        }
                         if (exoPlayer.isPlaying && exoPlayer.playbackState == Player.STATE_READY) {
                             isInterClipSwitching = false
                         }
@@ -656,8 +669,8 @@ class EditorPlayerManager(
                         val info = TimelineUtils.findClipAtTimelinePosition(activeClips, _highResPositionMs.value)
                         val expectedSource = info?.sourcePositionMs ?: 0L
                         val currentExo = exoPlayer.currentPosition
-                        // Se o exoPlayer já chegou próximo ou saiu do estado de buffering, confirma o seek
-                        if (abs(currentExo - expectedSource) < 300L || !exoPlayer.isLoading) {
+                        // Confirma o seek apenas quando o ExoPlayer atinge a posição desejada
+                        if (abs(currentExo - expectedSource) < 300L) {
                             confirmedSeekGeneration = seekGeneration.get()
                         } else {
                             continue
@@ -673,7 +686,6 @@ class EditorPlayerManager(
                     val clip = activeClips[currentIndex]
 
                     if (clip.type == MediaType.PHOTO) {
-                        val now = System.currentTimeMillis()
                         val deltaMs = now - lastPhotoTickTime
                         lastPhotoTickTime = now
 
@@ -687,12 +699,15 @@ class EditorPlayerManager(
                             handleClipEnded()
                         } else {
                             _highResPositionMs.value = nextPos
-                            if (now - lastUiStateEmitTime >= 100L) {
+                            if (now - lastUiStateEmitTime >= 250L) {
                                 _playbackState.update { it.copy(currentPositionMs = nextPos) }
                                 lastUiStateEmitTime = now
                             }
                             onTimelinePositionChanged?.invoke(nextPos)
-                            audioSyncManager.syncWithMasterPlayhead(nextPos, isMasterPlaying = true)
+                            if (now - lastAudioSyncTime >= 120L) {
+                                audioSyncManager.syncWithMasterPlayhead(nextPos, isMasterPlaying = true)
+                                lastAudioSyncTime = now
+                            }
                         }
                     } else {
                         val sourcePos = exoPlayer.currentPosition
@@ -709,18 +724,19 @@ class EditorPlayerManager(
                                 clampedSource
                             )
                             _highResPositionMs.value = timelinePos
-                            val now = System.currentTimeMillis()
-                            if (now - lastUiStateEmitTime >= 100L) {
+                            if (now - lastUiStateEmitTime >= 250L) {
                                 _playbackState.update { it.copy(currentPositionMs = timelinePos) }
                                 lastUiStateEmitTime = now
                             }
                             onTimelinePositionChanged?.invoke(timelinePos)
-                            audioSyncManager.syncWithMasterPlayhead(timelinePos, isMasterPlaying = true)
+                            if (now - lastAudioSyncTime >= 120L) {
+                                audioSyncManager.syncWithMasterPlayhead(timelinePos, isMasterPlaying = true)
+                                lastAudioSyncTime = now
+                            }
                         }
                     }
                 } else {
                     // Apenas áudio ou reprodução após os clipes
-                    val now = System.currentTimeMillis()
                     val deltaMs = now - lastPhotoTickTime
                     lastPhotoTickTime = now
 
@@ -734,12 +750,15 @@ class EditorPlayerManager(
                         onTimelinePositionChanged?.invoke(totalDuration)
                     } else {
                         _highResPositionMs.value = nextPos
-                        if (now - lastUiStateEmitTime >= 100L) {
+                        if (now - lastUiStateEmitTime >= 250L) {
                             _playbackState.update { it.copy(currentPositionMs = nextPos) }
                             lastUiStateEmitTime = now
                         }
                         onTimelinePositionChanged?.invoke(nextPos)
-                        audioSyncManager.syncWithMasterPlayhead(nextPos, isMasterPlaying = true)
+                        if (now - lastAudioSyncTime >= 120L) {
+                            audioSyncManager.syncWithMasterPlayhead(nextPos, isMasterPlaying = true)
+                            lastAudioSyncTime = now
+                        }
                     }
                 }
             }

@@ -12,6 +12,15 @@ enum class MediaType {
     VIDEO, PHOTO, AUDIO
 }
 
+data class KeyframePoint(
+    val timeMs: Long,
+    val scale: Float = 1.0f,
+    val rotation: Float = 0f,
+    val positionX: Float = 0f,
+    val positionY: Float = 0f,
+    val opacity: Float = 1.0f
+)
+
 data class MediaClip(
     val id: String,
     val title: String,
@@ -48,7 +57,17 @@ data class MediaClip(
     val isFrozen: Boolean = false,
     val isVisible: Boolean = true,
     val isMuted: Boolean = false,
-    val isLocked: Boolean = false
+    val isLocked: Boolean = false,
+    val voiceEffect: String = "Normal", // Normal, Esquilo, Monstro, Eco, Robô, Telefone
+    val keyframes: List<KeyframePoint> = emptyList(),
+    val speedCurve: String = "Padrão",
+    val animationIn: String = "Nenhum",
+    val animationOut: String = "Nenhum",
+    val animationCombo: String = "Nenhum",
+    val animationDurationMs: Long = 500L,
+    val chromaKeyColor: String = "",
+    val chromaKeyIntensity: Float = 0f,
+    val chromaKeyShadow: Float = 0f
 )
 
 data class AudioTrackItem(
@@ -69,7 +88,8 @@ data class AudioTrackItem(
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = 0L,
     val fadeInMs: Long = 0L,
-    val fadeOutMs: Long = 0L
+    val fadeOutMs: Long = 0L,
+    val voiceEffect: String = "Normal"
 )
 
 data class TextOverlayItem(
@@ -110,6 +130,7 @@ data class StickerItem(
     val isVideo: Boolean = false,
     val startTimeMs: Long = 0L,
     val durationMs: Long = 3000L,
+    val trimStartMs: Long = 0L,
     val posX: Float = 0.5f, // 0..1
     val posY: Float = 0.5f, // 0..1
     val scale: Float = 1.0f,
@@ -202,6 +223,8 @@ data class ProjectItem(
     val isOverlayLocked: Boolean = false,
     val isAudioMuted: Boolean = false,
     val isAudioLocked: Boolean = false,
+    val canvasColorHex: String = "#000000",
+    val canvasBlurLevel: Float = 0f,
     val lastExportedPath: String? = null
 )
 

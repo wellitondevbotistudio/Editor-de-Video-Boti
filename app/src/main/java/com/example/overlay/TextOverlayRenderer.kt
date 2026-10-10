@@ -70,9 +70,9 @@ fun TextOverlayLayer(
         val canvasHpx = with(density) { canvasHeight.toPx() }
 
         texts.forEach { item ->
-            // Se o texto estiver fora do intervalo temporal visível, pula qualquer computação gráfica imediatamente
+            // Se o texto estiver fora do intervalo temporal visível ou invisível, pula qualquer computação gráfica imediatamente
             val isTimeActive = currentPlayheadMs in item.startTimeMs until (item.startTimeMs + item.durationMs)
-            if (!isTimeActive && !item.isVisible) return@forEach
+            if (!isTimeActive || !item.isVisible) return@forEach
 
             if (item.isVisible) {
                 val animState = OverlayAnimationEngine.calculateTextState(
@@ -111,6 +111,11 @@ fun TextOverlayLayer(
                         ) { onSelectText(item.id) }
                     } else {
                         Modifier
+                            .pointerInput(item.id) {
+                                detectTapGestures(
+                                    onTap = { onSelectText(item.id) }
+                                )
+                            }
                             .pointerInput(item.id, canvasWpx, canvasHpx) {
                                 var curX = item.posX
                                 var curY = item.posY
@@ -137,12 +142,6 @@ fun TextOverlayLayer(
                                         onMoveText(item.id, curX, curY, true)
                                     }
                                 )
-                            }
-                            .clickable(
-                                interactionSource = textInteractionSource,
-                                indication = null
-                            ) {
-                                onSelectText(item.id)
                             }
                     }
 
@@ -199,7 +198,9 @@ fun TextOverlayLayer(
                             )
                         }
 
-                        // Alças de controle quando selecionado
+                        // Alças de controle quando selecionado com escala constante independente
+                        val invScale = (1f / (item.scale * animState.scale)).coerceIn(0.15f, 4f)
+
                         if (isSelected && isLocked) {
                             // Indicador de Camada Bloqueada
                             Surface(
@@ -207,45 +208,57 @@ fun TextOverlayLayer(
                                 color = Color(0xFF1E293B),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEAB308)),
                                 modifier = Modifier
-                                    .size(22.dp)
+                                    .size(28.dp)
                                     .align(Alignment.TopCenter)
-                                    .offset(y = (-11).dp)
+                                    .offset(y = (-14).dp)
+                                    .graphicsLayer {
+                                        scaleX = invScale
+                                        scaleY = invScale
+                                    }
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Lock,
                                     contentDescription = "Texto Bloqueado",
                                     tint = Color(0xFFEAB308),
-                                    modifier = Modifier.padding(3.dp)
+                                    modifier = Modifier.padding(4.dp)
                                 )
                             }
                         } else if (isSelected) {
                             // 1. Excluir (Topo-Direita)
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = CircleShape,
                                 color = PrimaryPurple,
                                 modifier = Modifier
-                                    .size(24.dp)
+                                    .size(28.dp)
                                     .align(Alignment.TopEnd)
-                                    .offset(x = 6.dp, y = (-6).dp)
+                                    .offset(x = 10.dp, y = (-10).dp)
+                                    .graphicsLayer {
+                                        scaleX = invScale
+                                        scaleY = invScale
+                                    }
                                     .clickable { onDeleteText(item.id) }
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Remover Texto",
                                     tint = Color.White,
-                                    modifier = Modifier.padding(4.dp)
+                                    modifier = Modifier.padding(5.dp)
                                 )
                             }
 
                             // 2. Girar (Topo-Esquerda)
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = CircleShape,
                                 color = Color(0xFF1E293B),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryPurpleVariant),
                                 modifier = Modifier
-                                    .size(24.dp)
+                                    .size(28.dp)
                                     .align(Alignment.TopStart)
-                                    .offset(x = (-6).dp, y = (-6).dp)
+                                    .offset(x = (-10).dp, y = (-10).dp)
+                                    .graphicsLayer {
+                                        scaleX = invScale
+                                        scaleY = invScale
+                                    }
                                     .clickable {
                                         val newRot = (item.rotation + 45f) % 360f
                                         onRotateText?.invoke(item.id, newRot)
@@ -255,18 +268,22 @@ fun TextOverlayLayer(
                                     imageVector = Icons.Default.RotateRight,
                                     contentDescription = "Girar Texto",
                                     tint = Color.White,
-                                    modifier = Modifier.padding(4.dp)
+                                    modifier = Modifier.padding(5.dp)
                                 )
                             }
 
                             // 3. Dimensionar (Base-Direita)
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = CircleShape,
                                 color = PrimaryPurpleVariant,
                                 modifier = Modifier
-                                    .size(24.dp)
+                                    .size(28.dp)
                                     .align(Alignment.BottomEnd)
-                                    .offset(x = 6.dp, y = 6.dp)
+                                    .offset(x = 10.dp, y = 10.dp)
+                                    .graphicsLayer {
+                                        scaleX = invScale
+                                        scaleY = invScale
+                                    }
                                     .pointerInput(item.id, canvasWpx) {
                                         var initialScale = item.scale
                                         var accumulatedDelta = 0f
@@ -290,7 +307,7 @@ fun TextOverlayLayer(
                                     imageVector = Icons.Default.OpenInFull,
                                     contentDescription = "Redimensionar Texto",
                                     tint = Color.White,
-                                    modifier = Modifier.padding(4.dp)
+                                    modifier = Modifier.padding(5.dp)
                                 )
                             }
                         }

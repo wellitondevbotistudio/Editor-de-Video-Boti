@@ -203,13 +203,24 @@ class VideoFrameRenderer(
             val srcW = srcBitmap.width.toFloat()
             val srcH = srcBitmap.height.toFloat()
 
-            val targetCropRatio = when (clip.cropRatio) {
+            val baseCropRatio = when (clip.cropRatio) {
                 "1:1" -> 1f
                 "16:9" -> 16f / 9f
                 "9:16" -> 9f / 16f
                 "4:5" -> 4f / 5f
                 "4:3" -> 4f / 3f
                 else -> srcW / srcH
+            }
+
+            // Verifica se o clipe tem rotação ortogonal ímpar (90°, 270°, etc.)
+            val normalizedRot = ((clip.rotation % 360f) + 360f) % 360f
+            val isRotatedOdd = (normalizedRot in 45f..135f) || (normalizedRot in 225f..315f)
+
+            // Se for rotacionado em 90° ou 270°, inverte a razão alvo para manter a proporção sem distorção
+            val targetCropRatio = if (clip.cropRatio != "Original" && isRotatedOdd) {
+                1f / baseCropRatio
+            } else {
+                baseCropRatio
             }
 
             val currentSrcRatio = srcW / srcH

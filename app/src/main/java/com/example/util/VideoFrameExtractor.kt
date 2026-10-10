@@ -14,9 +14,47 @@ import java.io.File
 object VideoFrameExtractor {
 
     // Cache em memória de frames decodificados por chave (path_timeMs)
-    private val frameCache = object : LruCache<String, Bitmap>(40) {
+    private val frameCache = object : LruCache<String, Bitmap>(160) {
         override fun sizeOf(key: String, bitmap: Bitmap): Int {
             return (bitmap.byteCount / 1024).coerceAtLeast(1) // KB
+        }
+    }
+
+    // Pool estável de MediaMetadataRetriever por fonte para eliminar overhead nativo de criação/destruição contínua
+    private val retrieverPool = java.util.concurrent.ConcurrentHashMap<String, MediaMetadataRetriever>()
+
+    private fun getOrCreateRetriever(context: Context, localPath: String?, uri: String?): Pair<MediaMetadataRetriever, String>? {
+        val key = localPath?.ifBlank { null } ?: uri?.ifBlank { null } ?: return null
+        val existing = retrieverPool[key]
+        if (existing != null) return Pair(existing, key)
+
+        val retriever = MediaMetadataRetriever()
+        return try {
+            val file = if (!localPath.isNullOrBlank()) File(localPath) else null
+            if (file != null && file.exists()) {
+                retriever.setDataSource(file.absolutePath)
+            } else if (!uri.isNullOrBlank()) {
+                val parsedUri = Uri.parse(uri)
+                if (parsedUri.scheme == "file") {
+                    retriever.setDataSource(parsedUri.path)
+                } else {
+                    retriever.setDataSource(context, parsedUri)
+                }
+            } else {
+                return null
+            }
+            if (retrieverPool.size >= 8) {
+                // Remove um antigo para limitar memória
+                val oldestKey = retrieverPool.keys.firstOrNull()
+                if (oldestKey != null) {
+                    try { retrieverPool.remove(oldestKey)?.release() } catch (_: Exception) {}
+                }
+            }
+            retrieverPool[key] = retriever
+            Pair(retriever, key)
+        } catch (_: Exception) {
+            try { retriever.release() } catch (_: Exception) {}
+            null
         }
     }
 
@@ -34,8 +72,8 @@ object VideoFrameExtractor {
         timeMs: Long
     ): Bitmap? {
         val safeTimeMs = timeMs.coerceAtLeast(0L)
-        // Quantiza em janelas de 100ms para reaproveitamento eficiente durante scrub e reprodução
-        val quantizedTime = (safeTimeMs / 100) * 100
+        // Cadência fluida de ~30fps (33ms) para eliminar efeito slideshow e reaproveitar frames suavemente
+        val quantizedTime = (safeTimeMs / 33) * 33
         val sourceKey = when {
             !localPath.isNullOrBlank() -> localPath
             !uri.isNullOrBlank() -> uri
@@ -47,42 +85,35 @@ object VideoFrameExtractor {
             if (!it.isRecycled) return it
         }
 
-        val retriever = MediaMetadataRetriever()
-        return try {
-            val file = if (!localPath.isNullOrBlank()) File(localPath) else null
-            if (file != null && file.exists()) {
-                retriever.setDataSource(file.absolutePath)
-            } else if (!uri.isNullOrBlank()) {
-                val parsedUri = Uri.parse(uri)
-                if (parsedUri.scheme == "file") {
-                    retriever.setDataSource(parsedUri.path)
-                } else {
-                    retriever.setDataSource(context, parsedUri)
-                }
-            } else {
-                return null
-            }
+        val pair = getOrCreateRetriever(context, localPath, uri) ?: return null
+        val retriever = pair.first
 
-            val targetUs = safeTimeMs * 1000L
-            val bitmap = retriever.getFrameAtTime(
-                targetUs,
-                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-            ) ?: retriever.getFrameAtTime(targetUs) ?: retriever.frameAtTime
-
-            if (bitmap != null) {
-                frameCache.put(cacheKey, bitmap)
-            }
-            bitmap
-        } catch (_: Exception) {
-            null
-        } finally {
+        return synchronized(retriever) {
             try {
-                retriever.release()
-            } catch (_: Exception) {}
+                val targetUs = safeTimeMs * 1000L
+                val bitmap = retriever.getFrameAtTime(
+                    targetUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                ) ?: retriever.getFrameAtTime(
+                    targetUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST
+                ) ?: retriever.getFrameAtTime(targetUs) ?: retriever.frameAtTime
+
+                if (bitmap != null) {
+                    frameCache.put(cacheKey, bitmap)
+                }
+                bitmap
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 
     fun clearCache() {
         frameCache.evictAll()
+        retrieverPool.forEach { (_, r) ->
+            try { r.release() } catch (_: Exception) {}
+        }
+        retrieverPool.clear()
     }
 }
